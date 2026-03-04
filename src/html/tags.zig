@@ -16,10 +16,8 @@ pub inline fn first8Key(name: []const u8) u64 {
 /// The packed keys are byte-exact; callers are expected to canonicalize the first
 /// eight bytes (parser does this in-place).
 pub inline fn equalByLenAndKeyIgnoreCase(a: []const u8, a_key: u64, b: []const u8, b_key: u64) bool {
-    if (a.len != b.len) return false;
-    if (a_key != b_key) return false;
-    if (a.len <= 8) return true;
-    return tables.eqlIgnoreCaseAscii(a[8..], b[8..]);
+    if (a.len != b.len or a_key != b_key) return false;
+    return if (a.len <= 8) true else tables.eqlIgnoreCaseAscii(a[8..], b[8..]);
 }
 
 inline fn litKey(comptime s: []const u8) u64 {
@@ -238,18 +236,18 @@ pub fn shouldImplicitlyCloseWithKeys(open_tag: []const u8, open_key: u64, new_ta
     return switch (open_tag.len) {
         1 => open_key == KEY.P and closesPWithKey(new_tag, new_key),
         2 => switch (open_key) {
-            KEY.LI => new_tag.len == 2 and new_key == KEY.LI,
-            KEY.DT, KEY.DD => new_tag.len == 2 and (new_key == KEY.DT or new_key == KEY.DD),
-            KEY.TR => new_tag.len == 2 and new_key == KEY.TR,
-            KEY.TD, KEY.TH => new_tag.len == 2 and (new_key == KEY.TD or new_key == KEY.TH),
+            KEY.LI => new_key == KEY.LI,
+            KEY.DT, KEY.DD => new_key == KEY.DT or new_key == KEY.DD,
+            KEY.TR => new_key == KEY.TR,
+            KEY.TD, KEY.TH => new_key == KEY.TD or new_key == KEY.TH,
             else => false,
         },
         4 => switch (open_key) {
-            KEY.HEAD => new_tag.len == 4 and new_key == KEY.BODY,
+            KEY.HEAD => new_key == KEY.BODY,
             else => false,
         },
         6 => switch (open_key) {
-            KEY.OPTION => new_tag.len == 6 and new_key == KEY.OPTION,
+            KEY.OPTION => new_key == KEY.OPTION,
             else => false,
         },
         else => false,
