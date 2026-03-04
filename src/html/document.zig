@@ -10,9 +10,10 @@ const instrumentation = @import("../debug/instrumentation.zig");
 const parser = @import("parser.zig");
 const node_api = @import("node.zig");
 const tags = @import("tags.zig");
+const common = @import("../common.zig");
 
 /// Sentinel used for missing node indexes and invalid spans.
-pub const InvalidIndex: u32 = std.math.maxInt(u32);
+pub const InvalidIndex: u32 = common.InvalidIndex;
 const QueryAccelMinBudgetBytes: usize = 4096;
 const QueryAccelBudgetDivisor: usize = 20; // 5%
 
@@ -34,9 +35,7 @@ pub const NodeType = enum(u3) {
     text,
 };
 
-inline fn isElementLike(kind: NodeType) bool {
-    return kind == .element;
-}
+const isElementLike = common.isElementLike;
 
 /// Compile-time parser options and type factory for generated public API types.
 pub const ParseOptions = struct {

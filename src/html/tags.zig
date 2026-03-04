@@ -24,13 +24,6 @@ inline fn litKey(comptime s: []const u8) u64 {
     return comptime first8Key(s);
 }
 
-inline fn eqLit(name: []const u8, key: u64, comptime lit: []const u8) bool {
-    if (name.len != lit.len) return false;
-    if (key != comptime litKey(lit)) return false;
-    if (lit.len <= 8) return true;
-    return tables.eqlIgnoreCaseAscii(name[8..], lit[8..]);
-}
-
 const KEY = struct {
     const AREA = litKey("area");
     const BASE = litKey("base");
@@ -96,11 +89,6 @@ pub fn isVoidTag(name: []const u8) bool {
 /// Returns whether tag is HTML raw-text tag (`script`, `style`).
 pub fn isRawTextTag(name: []const u8) bool {
     return isRawTextTagWithKey(name, first8Key(name));
-}
-
-/// Returns whether `new_tag` implicitly closes `open_tag`.
-pub fn shouldImplicitlyClose(open_tag: []const u8, new_tag: []const u8) bool {
-    return shouldImplicitlyCloseWithKeys(open_tag, first8Key(open_tag), new_tag, first8Key(new_tag));
 }
 
 /// Fast void-tag check with caller-provided key.
@@ -319,12 +307,11 @@ pub inline fn isSvgWithKey(name: []const u8, key: u64) bool {
 test "tag helpers on canonical lowercase names" {
     try std.testing.expect(isVoidTag("img"));
     try std.testing.expect(isRawTextTag("script"));
-    try std.testing.expect(shouldImplicitlyClose("p", "blockquote"));
+    try std.testing.expect(shouldImplicitlyCloseWithKeys("p", KEY.P, "blockquote", KEY.BLOCKQUOTE));
 }
 
 test "equalByLenAndKeyIgnoreCase handles long names with canonical keys" {
     const a = "blockquote";
     const b = "blockquote";
     try std.testing.expect(equalByLenAndKeyIgnoreCase(a, first8Key(a), b, first8Key(b)));
-    try std.testing.expect(eqLit("blockquote", first8Key("blockquote"), "blockquote"));
 }

@@ -5,12 +5,14 @@ const tables = @import("../html/tables.zig");
 const tags = @import("../html/tags.zig");
 const attr_inline = @import("../html/attr_inline.zig");
 const selector_debug = @import("../debug/selector_debug.zig");
+const common = @import("../common.zig");
 
-const InvalidIndex: u32 = std.math.maxInt(u32);
-
-inline fn isElementLike(kind: anytype) bool {
-    return kind == .element;
-}
+const InvalidIndex: u32 = common.InvalidIndex;
+const isElementLike = common.isElementLike;
+const matchesScopeAnchor = common.matchesScopeAnchor;
+const parentElement = common.parentElement;
+const prevElementSibling = common.prevElementSibling;
+const nextElementSibling = common.nextElementSibling;
 
 /// Debug matcher that returns first match and records near-miss diagnostics.
 pub fn explainFirstMatch(
@@ -241,55 +243,4 @@ fn matchesPseudo(doc: anytype, node_index: u32, pseudo: ast.Pseudo) bool {
             break :blk pseudo.nth.matches(position);
         },
     };
-}
-
-fn matchesScopeAnchor(doc: anytype, combinator: ast.Combinator, node_index: u32, scope_root: u32) bool {
-    if (combinator == .none) return true;
-
-    const anchor: u32 = if (scope_root == InvalidIndex) 0 else scope_root;
-    switch (combinator) {
-        .child => {
-            const p = doc.parentIndex(node_index);
-            return p != InvalidIndex and p == anchor;
-        },
-        .descendant => {
-            var p = doc.parentIndex(node_index);
-            while (p != InvalidIndex) {
-                if (p == anchor) return true;
-                if (p == 0) break;
-                p = doc.parentIndex(p);
-            }
-            return false;
-        },
-        .adjacent => return prevElementSibling(doc, node_index) == anchor,
-        .sibling => {
-            var prev = prevElementSibling(doc, node_index);
-            while (prev) |idx| {
-                if (idx == anchor) return true;
-                prev = prevElementSibling(doc, idx);
-            }
-            return false;
-        },
-        .none => return true,
-    }
-}
-
-fn parentElement(doc: anytype, node_index: u32) ?u32 {
-    const p = doc.parentIndex(node_index);
-    if (p == InvalidIndex or p == 0) return null;
-    return p;
-}
-
-fn prevElementSibling(doc: anytype, node_index: u32) ?u32 {
-    var prev = doc.nodes.items[node_index].prev_sibling;
-    while (prev != InvalidIndex) : (prev = doc.nodes.items[prev].prev_sibling) {
-        if (isElementLike(doc.nodes.items[prev].kind)) return prev;
-    }
-    return null;
-}
-
-fn nextElementSibling(doc: anytype, node_index: u32) ?u32 {
-    const next = doc.nextElementSiblingIndex(node_index);
-    if (next == InvalidIndex) return null;
-    return next;
 }

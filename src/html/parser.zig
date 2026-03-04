@@ -2,8 +2,9 @@ const std = @import("std");
 const tables = @import("tables.zig");
 const tags = @import("tags.zig");
 const scanner = @import("scanner.zig");
+const common = @import("../common.zig");
 
-const InvalidIndex: u32 = std.math.maxInt(u32);
+const InvalidIndex: u32 = common.InvalidIndex;
 const SvgTagKey: u64 = tags.first8Key("svg");
 
 /// Parses mutable HTML bytes into `doc` using permissive, in-place tree construction.
@@ -389,7 +390,7 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
             return idx;
         }
 
-        const appendAlloc = @import("../common.zig").appendAlloc;
+        const appendAlloc = common.appendAlloc;
         fn pushNode(noalias self: *Self, node: @TypeOf(self.doc.nodes.items[0])) !u32 {
             const len = self.doc.nodes.items.len;
             try appendAlloc(@TypeOf(node), &self.doc.nodes, self.doc.allocator, node);

@@ -7,11 +7,11 @@ pub const TextOptions = @import("html/document.zig").TextOptions;
 /// Compiled selector representation shared by comptime/runtime query paths.
 pub const Selector = @import("selector/ast.zig").Selector;
 /// Structured query-debug output populated by `queryOneDebug` APIs.
-pub const QueryDebugReport = @import("debug/selector_debug.zig").QueryDebugReport;
+pub const QueryDebugReport = @import("common.zig").QueryDebugReport;
 /// Enumerates first-failure categories recorded by debug query reporting.
-pub const DebugFailureKind = @import("debug/selector_debug.zig").DebugFailureKind;
+pub const DebugFailureKind = @import("common.zig").DebugFailureKind;
 /// Single near-miss record used by query diagnostics.
-pub const NearMiss = @import("debug/selector_debug.zig").NearMiss;
+pub const NearMiss = @import("common.zig").NearMiss;
 /// Parse instrumentation payload emitted by hook wrappers.
 pub const ParseInstrumentationStats = @import("debug/instrumentation.zig").ParseInstrumentationStats;
 /// Query instrumentation payload emitted by hook wrappers.

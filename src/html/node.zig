@@ -2,12 +2,10 @@ const std = @import("std");
 const tables = @import("tables.zig");
 const entities = @import("entities.zig");
 const attr_inline = @import("attr_inline.zig");
+const common = @import("../common.zig");
 
-const InvalidIndex: u32 = std.math.maxInt(u32);
-
-inline fn isElementLike(kind: anytype) bool {
-    return kind == .element;
-}
+const InvalidIndex: u32 = common.InvalidIndex;
+const isElementLike = common.isElementLike;
 
 /// Controls text extraction behavior for `innerText*` APIs.
 pub const TextOptions = struct {
