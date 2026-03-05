@@ -68,3 +68,18 @@ test "smoke parse/query" {
     try std.testing.expectEqualStrings("div", parent.tagName());
     try std.testing.expect(doc.queryOne("div > span.k") != null);
 }
+
+test "tag-name state keeps < inside malformed start tag name" {
+    const alloc = std.testing.allocator;
+    const opts: ParseOptions = .{};
+    const Document = opts.GetDocument();
+
+    var doc = Document.init(alloc);
+    defer doc.deinit();
+
+    var src = "<div<div>".*;
+    try doc.parse(&src, .{});
+
+    const first = doc.nodeAt(1) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("div<div", first.tagName());
+}

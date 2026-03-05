@@ -36,9 +36,10 @@ pub fn isIdentChar(c: u8) bool {
     return isIdentStart(c) or (c >= '0' and c <= '9') or c == '-' or c == '.';
 }
 
-/// Returns whether byte is valid in tag names.
+/// Returns whether byte is consumed by the HTML tag-name state.
+/// Matches the tokenizer shape: continue until whitespace, `/`, `>`, or NUL.
 pub fn isTagNameChar(c: u8) bool {
-    return isIdentChar(c);
+    return !isWhitespace(c) and c != '/' and c != '>' and c != 0;
 }
 
 /// Precomputed lowercase conversion table.
@@ -105,4 +106,11 @@ pub fn tokenIncludesAsciiWhitespace(value: []const u8, token: []const u8) bool {
 test "lower table" {
     try std.testing.expect(lower('A') == 'a');
     try std.testing.expect(lower('z') == 'z');
+}
+
+test "tag name state includes < and excludes delimiters" {
+    try std.testing.expect(isTagNameChar('<'));
+    try std.testing.expect(!isTagNameChar('>'));
+    try std.testing.expect(!isTagNameChar('/'));
+    try std.testing.expect(!isTagNameChar(' '));
 }

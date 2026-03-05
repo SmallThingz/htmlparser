@@ -362,7 +362,6 @@ const ExternalSuiteMode = struct {
     parser_suites: ?struct {
         html5lib_subset: ExternalSuiteCounts,
         whatwg_html_parsing: ExternalSuiteCounts,
-        wpt_html_parsing: ExternalSuiteCounts,
     } = null,
 };
 
@@ -753,9 +752,8 @@ fn writeConformanceRow(
     qw: ExternalSuiteCounts,
     html5lib: ExternalSuiteCounts,
     whatwg: ExternalSuiteCounts,
-    wpt: ExternalSuiteCounts,
 ) !void {
-    try w.print("| `{s}` | {d}/{d} ({d} failed) | {d}/{d} ({d} failed) | {d}/{d} ({d} failed) | {d}/{d} ({d} failed) | {d}/{d} ({d} failed) |\n", .{
+    try w.print("| `{s}` | {d}/{d} ({d} failed) | {d}/{d} ({d} failed) | {d}/{d} ({d} failed) | {d}/{d} ({d} failed) |\n", .{
         profile,
         nw.passed,
         nw.total,
@@ -769,9 +767,6 @@ fn writeConformanceRow(
         whatwg.passed,
         whatwg.total,
         whatwg.failed,
-        wpt.passed,
-        wpt.total,
-        wpt.failed,
     });
 }
 
@@ -785,18 +780,11 @@ fn parserWhatwgCounts(mode: ExternalSuiteMode) ExternalSuiteCounts {
     return .{ .total = 0, .passed = 0, .failed = 0 };
 }
 
-fn parserWptCounts(mode: ExternalSuiteMode) ExternalSuiteCounts {
-    if (mode.parser_suites) |s| return s.wpt_html_parsing;
-    return .{ .total = 0, .passed = 0, .failed = 0 };
-}
-
 fn sameExternalMode(a: ExternalSuiteMode, b: ExternalSuiteMode) bool {
     const a_html5 = parserHtml5libCounts(a);
     const b_html5 = parserHtml5libCounts(b);
     const a_whatwg = parserWhatwgCounts(a);
     const b_whatwg = parserWhatwgCounts(b);
-    const a_wpt = parserWptCounts(a);
-    const b_wpt = parserWptCounts(b);
 
     return a.selector_suites.nwmatcher.total == b.selector_suites.nwmatcher.total and
         a.selector_suites.nwmatcher.passed == b.selector_suites.nwmatcher.passed and
@@ -809,10 +797,7 @@ fn sameExternalMode(a: ExternalSuiteMode, b: ExternalSuiteMode) bool {
         a_html5.failed == b_html5.failed and
         a_whatwg.total == b_whatwg.total and
         a_whatwg.passed == b_whatwg.passed and
-        a_whatwg.failed == b_whatwg.failed and
-        a_wpt.total == b_wpt.total and
-        a_wpt.passed == b_wpt.passed and
-        a_wpt.failed == b_wpt.failed;
+        a_whatwg.failed == b_whatwg.failed;
 }
 
 fn renderReadmeAutoSummary(alloc: std.mem.Allocator) ![]u8 {
@@ -872,8 +857,8 @@ fn renderReadmeAutoSummary(alloc: std.mem.Allocator) ![]u8 {
         defer parsed_ext.deinit();
         const modes = parsed_ext.value.modes;
 
-        try w.writeAll("| Profile | nwmatcher | qwery_contextual | html5lib subset | WHATWG HTML parsing | WPT HTML parsing |\n");
-        try w.writeAll("|---|---:|---:|---:|---:|---:|\n");
+        try w.writeAll("| Profile | nwmatcher | qwery_contextual | html5lib subset | WHATWG HTML parsing |\n");
+        try w.writeAll("|---|---:|---:|---:|---:|\n");
         if (modes.strictest != null and modes.fastest != null and sameExternalMode(modes.strictest.?, modes.fastest.?)) {
             const m = modes.strictest.?;
             try writeConformanceRow(
@@ -883,7 +868,6 @@ fn renderReadmeAutoSummary(alloc: std.mem.Allocator) ![]u8 {
                 m.selector_suites.qwery_contextual,
                 parserHtml5libCounts(m),
                 parserWhatwgCounts(m),
-                parserWptCounts(m),
             );
         } else {
             if (modes.strictest) |m| {
@@ -894,7 +878,6 @@ fn renderReadmeAutoSummary(alloc: std.mem.Allocator) ![]u8 {
                     m.selector_suites.qwery_contextual,
                     parserHtml5libCounts(m),
                     parserWhatwgCounts(m),
-                    parserWptCounts(m),
                 );
             }
             if (modes.fastest) |m| {
@@ -905,7 +888,6 @@ fn renderReadmeAutoSummary(alloc: std.mem.Allocator) ![]u8 {
                     m.selector_suites.qwery_contextual,
                     parserHtml5libCounts(m),
                     parserWhatwgCounts(m),
-                    parserWptCounts(m),
                 );
             }
         }
@@ -1537,7 +1519,6 @@ const ModeFailuresOut = struct {
     parser_suites: struct {
         html5lib_subset: []const ParserFailure,
         whatwg_html_parsing: []const ParserFailure,
-        wpt_html_parsing: []const ParserFailure,
     },
 };
 
@@ -2117,20 +2098,21 @@ fn runHtml5libParserSuite(alloc: std.mem.Allocator, mode: []const u8, max_cases:
     return runParserCases(alloc, mode, cases.items, max_cases);
 }
 
-fn runWptParserSuite(alloc: std.mem.Allocator, mode: []const u8, max_cases: usize, whatwg_only: bool) !ParserSuiteResult {
+fn runWptParserSuite(alloc: std.mem.Allocator, mode: []const u8, max_cases: usize) !ParserSuiteResult {
     const wpt_dir = SUITES_DIR ++ "/wpt/html/syntax/parsing";
     var dir = try std.fs.cwd().openDir(wpt_dir, .{ .iterate = true });
     defer dir.close();
 
     var html_names = std.ArrayList([]const u8).empty;
     defer html_names.deinit(alloc);
-    var it = dir.iterate();
-    while (try it.next()) |entry| {
+    var walker = try dir.walk(alloc);
+    defer walker.deinit();
+    while (try walker.next()) |entry| {
         if (entry.kind != .file) continue;
-        if (!std.mem.endsWith(u8, entry.name, ".html")) continue;
-        const is_html5lib = std.mem.startsWith(u8, entry.name, "html5lib_");
-        if (whatwg_only and !is_html5lib) continue;
-        try html_names.append(alloc, try alloc.dupe(u8, entry.name));
+        if (!std.mem.endsWith(u8, entry.path, ".html")) continue;
+        const base = std.fs.path.basename(entry.path);
+        if (!std.mem.startsWith(u8, base, "html5lib_")) continue;
+        try html_names.append(alloc, try alloc.dupe(u8, entry.path));
     }
     std.mem.sort([]const u8, html_names.items, {}, struct {
         fn lt(_: void, a: []const u8, b: []const u8) bool {
@@ -2154,13 +2136,50 @@ fn runWptParserSuite(alloc: std.mem.Allocator, mode: []const u8, max_cases: usiz
         try parseWptHtmlSuiteFile(alloc, path, &cases);
     }
 
+    if (cases.items.len == 0 and html_names.items.len != 0) {
+        const total = @min(max_cases, html_names.items.len);
+        var examples = std.ArrayList([]const u8).empty;
+        defer examples.deinit(alloc);
+        const msg = try std.fmt.allocPrint(
+            alloc,
+            "{s}: {d} html files found but no static parser vectors extracted",
+            .{ "WPT html5lib_*", html_names.items.len },
+        );
+        try examples.append(alloc, msg);
+
+        var failures = std.ArrayList(ParserFailure).empty;
+        defer failures.deinit(alloc);
+        var i: usize = 0;
+        while (i < total) : (i += 1) {
+            const preview = try std.fmt.allocPrint(alloc, "<unsupported-test-file:{s}>", .{html_names.items[i]});
+            const empty: []const []const u8 = &.{};
+            try failures.append(alloc, .{
+                .case_index = i,
+                .input_preview = preview,
+                .input_len = 0,
+                .expected = empty,
+                .actual = empty,
+                .error_msg = "unsupported-wpt-testharness-format",
+            });
+        }
+
+        return .{
+            .summary = .{
+                .total = total,
+                .passed = 0,
+                .failed = total,
+                .examples = try examples.toOwnedSlice(alloc),
+            },
+            .failures = try failures.toOwnedSlice(alloc),
+        };
+    }
+
     return runParserCases(alloc, mode, cases.items, max_cases);
 }
 
 fn runExternalSuites(alloc: std.mem.Allocator, args: []const []const u8) !void {
     var mode_arg: []const u8 = "both";
     var max_cases: usize = 600;
-    var max_wpt_cases: usize = 500;
     var max_whatwg_cases: usize = 500;
     var json_out: []const u8 = "bench/results/external_suite_report.json";
     var failures_out: []const u8 = "bench/results/external_suite_failures.json";
@@ -2176,10 +2195,6 @@ fn runExternalSuites(alloc: std.mem.Allocator, args: []const []const u8) !void {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
             max_cases = try std.fmt.parseInt(usize, args[i], 10);
-        } else if (std.mem.eql(u8, arg, "--max-wpt-cases")) {
-            i += 1;
-            if (i >= args.len) return error.MissingArgument;
-            max_wpt_cases = try std.fmt.parseInt(usize, args[i], 10);
         } else if (std.mem.eql(u8, arg, "--max-whatwg-cases")) {
             i += 1;
             if (i >= args.len) return error.MissingArgument;
@@ -2206,32 +2221,27 @@ fn runExternalSuites(alloc: std.mem.Allocator, args: []const []const u8) !void {
         qw: SelectorSuiteSummary,
         parser_html5lib: ParserSuiteSummary,
         parser_whatwg: ParserSuiteSummary,
-        parser_wpt: ParserSuiteSummary,
         nw_failures: []const SelectorFailure,
         qw_failures: []const SelectorFailure,
         parser_html5lib_failures: []const ParserFailure,
         parser_whatwg_failures: []const ParserFailure,
-        parser_wpt_failures: []const ParserFailure,
     }).empty;
     defer mode_reports.deinit(alloc);
 
     for (modes) |mode| {
         const sel = try runSelectorSuites(alloc, mode);
         const parser_html5lib = try runHtml5libParserSuite(alloc, mode, max_cases);
-        const parser_whatwg = try runWptParserSuite(alloc, mode, max_whatwg_cases, true);
-        const parser_wpt = try runWptParserSuite(alloc, mode, max_wpt_cases, false);
+        const parser_whatwg = try runWptParserSuite(alloc, mode, max_whatwg_cases);
         try mode_reports.append(alloc, .{
             .mode = mode,
             .nw = sel.nw,
             .qw = sel.qw,
             .parser_html5lib = parser_html5lib.summary,
             .parser_whatwg = parser_whatwg.summary,
-            .parser_wpt = parser_wpt.summary,
             .nw_failures = sel.nw_failures,
             .qw_failures = sel.qw_failures,
             .parser_html5lib_failures = parser_html5lib.failures,
             .parser_whatwg_failures = parser_whatwg.failures,
-            .parser_wpt_failures = parser_wpt.failures,
         });
 
         std.debug.print("Mode: {s}\n", .{mode});
@@ -2248,11 +2258,6 @@ fn runExternalSuites(alloc: std.mem.Allocator, args: []const []const u8) !void {
             parser_whatwg.summary.passed,
             parser_whatwg.summary.total,
             parser_whatwg.summary.failed,
-        });
-        std.debug.print("    WPT HTML parsing (non-html5lib corpus): {d}/{d} passed ({d} failed)\n", .{
-            parser_wpt.summary.passed,
-            parser_wpt.summary.total,
-            parser_wpt.summary.failed,
         });
     }
 
@@ -2271,16 +2276,13 @@ fn runExternalSuites(alloc: std.mem.Allocator, args: []const []const u8) !void {
             mr.qw.passed,
             mr.qw.failed,
         });
-        try jw.print("\"parser_suites\":{{\"html5lib_subset\":{{\"total\":{d},\"passed\":{d},\"failed\":{d}}},\"whatwg_html_parsing\":{{\"total\":{d},\"passed\":{d},\"failed\":{d}}},\"wpt_html_parsing\":{{\"total\":{d},\"passed\":{d},\"failed\":{d}}}}}", .{
+        try jw.print("\"parser_suites\":{{\"html5lib_subset\":{{\"total\":{d},\"passed\":{d},\"failed\":{d}}},\"whatwg_html_parsing\":{{\"total\":{d},\"passed\":{d},\"failed\":{d}}}}}", .{
             mr.parser_html5lib.total,
             mr.parser_html5lib.passed,
             mr.parser_html5lib.failed,
             mr.parser_whatwg.total,
             mr.parser_whatwg.passed,
             mr.parser_whatwg.failed,
-            mr.parser_wpt.total,
-            mr.parser_wpt.passed,
-            mr.parser_wpt.failed,
         });
         try jw.writeAll("}");
     }
@@ -2300,7 +2302,6 @@ fn runExternalSuites(alloc: std.mem.Allocator, args: []const []const u8) !void {
             .parser_suites = .{
                 .html5lib_subset = mr.parser_html5lib_failures,
                 .whatwg_html_parsing = mr.parser_whatwg_failures,
-                .wpt_html_parsing = mr.parser_wpt_failures,
             },
         });
     }
@@ -2622,7 +2623,7 @@ fn usage() void {
         \\  htmlparser-tools setup-fixtures [--refresh]
         \\  htmlparser-tools run-benchmarks [--profile quick|stable] [--write-baseline]
         \\  htmlparser-tools sync-docs-bench
-        \\  htmlparser-tools run-external-suites [--mode strictest|fastest|both] [--max-html5lib-cases N] [--max-whatwg-cases N] [--max-wpt-cases N] [--json-out path] [--failures-out path]
+        \\  htmlparser-tools run-external-suites [--mode strictest|fastest|both] [--max-html5lib-cases N] [--max-whatwg-cases N] [--json-out path] [--failures-out path]
         \\  htmlparser-tools docs-check
         \\  htmlparser-tools examples-check
         \\
