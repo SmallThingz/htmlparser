@@ -27,7 +27,7 @@ fn parseDocForBench(noalias doc: *Document, input: []u8, mode: BenchMode) !void 
 
 /// Runs a built-in synthetic parse/query workload and prints elapsed ns.
 pub fn runSynthetic() !void {
-    const alloc = std.heap.page_allocator;
+    const alloc = std.heap.smp_allocator;
 
     var doc = Document.init(alloc);
     defer doc.deinit();
@@ -54,9 +54,7 @@ pub fn runSynthetic() !void {
 
 /// Benchmarks parse throughput for one fixture and mode; returns total elapsed ns.
 pub fn runParseFile(path: []const u8, iterations: usize, mode: BenchMode) !u64 {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const alloc = gpa.allocator();
+    const alloc = std.heap.smp_allocator;
 
     const input = try std.fs.cwd().readFileAlloc(alloc, path, std.math.maxInt(usize));
     defer alloc.free(input);
@@ -93,9 +91,7 @@ pub fn runParseFile(path: []const u8, iterations: usize, mode: BenchMode) !u64 {
 
 /// Benchmarks runtime selector parse cost; returns total elapsed ns.
 pub fn runQueryParse(selector: []const u8, iterations: usize) !u64 {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const alloc = gpa.allocator();
+    const alloc = std.heap.smp_allocator;
 
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
@@ -113,9 +109,7 @@ pub fn runQueryParse(selector: []const u8, iterations: usize) !u64 {
 
 /// Benchmarks runtime query execution over a pre-parsed document.
 pub fn runQueryMatch(path: []const u8, selector: []const u8, iterations: usize, mode: BenchMode) !u64 {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const alloc = gpa.allocator();
+    const alloc = std.heap.smp_allocator;
 
     const input = try std.fs.cwd().readFileAlloc(alloc, path, std.math.maxInt(usize));
     defer alloc.free(input);
@@ -139,9 +133,7 @@ pub fn runQueryMatch(path: []const u8, selector: []const u8, iterations: usize, 
 
 /// Benchmarks cached-selector query execution over a pre-parsed document.
 pub fn runQueryCached(path: []const u8, selector: []const u8, iterations: usize, mode: BenchMode) !u64 {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const alloc = gpa.allocator();
+    const alloc = std.heap.smp_allocator;
 
     const input = try std.fs.cwd().readFileAlloc(alloc, path, std.math.maxInt(usize));
     defer alloc.free(input);
@@ -170,9 +162,7 @@ pub fn runQueryCached(path: []const u8, selector: []const u8, iterations: usize,
 
 /// CLI entrypoint for parser/query benchmarking utilities.
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const alloc = gpa.allocator();
+    const alloc = std.heap.smp_allocator;
 
     const args = try std.process.argsAlloc(alloc);
     defer std.process.argsFree(alloc, args);
