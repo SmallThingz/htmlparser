@@ -12,6 +12,11 @@ const isElementLike = common.isElementLike;
 /// Controls text extraction behavior for `innerText*` APIs.
 pub const TextOptions = struct {
     normalize_whitespace: bool = true,
+
+    /// Formats text extraction options for human-readable output.
+    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+        try writer.print("TextOptions{{normalize_whitespace={}}}", .{self.normalize_whitespace});
+    }
 };
 
 /// Returns first element child of this node.
@@ -173,6 +178,14 @@ pub fn writeHtml(self: anytype, writer: anytype) WriterError(@TypeOf(writer))!vo
     try writeNodeHtml(doc, idx, raw, writer);
 }
 
+/// Writes HTML serialization for this node only, excluding its children.
+pub fn writeHtmlSelf(self: anytype, writer: anytype) WriterError(@TypeOf(writer))!void {
+    const doc = self.doc;
+    const idx: u32 = self.index;
+    const raw = &doc.nodes.items[@intCast(idx)];
+    try writeNodeHtmlSelf(doc, idx, raw, writer);
+}
+
 fn decodeTextNode(noalias node: anytype, doc: anytype) []const u8 {
     const text_mut = node.name_or_text.sliceMut(doc.source);
     const new_len = entities.decodeInPlaceIfEntity(text_mut);
@@ -263,6 +276,20 @@ fn writeNodeHtml(doc: anytype, idx: u32, noalias raw: anytype, writer: anytype) 
                 try writer.writeAll(name);
                 try writeByte(writer, '>');
             }
+        },
+    }
+}
+
+fn writeNodeHtmlSelf(doc: anytype, idx: u32, noalias raw: anytype, writer: anytype) WriterError(@TypeOf(writer))!void {
+    switch (raw.kind) {
+        .document => try writeChildrenHtml(doc, idx, raw, writer),
+        .text => try writer.writeAll(raw.name_or_text.slice(doc.source)),
+        .element => {
+            const name = raw.name_or_text.slice(doc.source);
+            try writeByte(writer, '<');
+            try writer.writeAll(name);
+            try writeAttrsHtml(doc, raw, writer);
+            try writeByte(writer, '>');
         },
     }
 }
@@ -521,4 +548,11 @@ fn ensureOutExtra(noalias out: *std.ArrayList(u8), alloc: std.mem.Allocator, ext
     if (target < need) target = need;
     if (target <= out.capacity) target = out.capacity + 1;
     try out.ensureTotalCapacity(alloc, target);
+}
+
+test "format text options" {
+    const alloc = std.testing.allocator;
+    const rendered = try std.fmt.allocPrint(alloc, "{f}", .{TextOptions{ .normalize_whitespace = false }});
+    defer alloc.free(rendered);
+    try std.testing.expectEqualStrings("TextOptions{normalize_whitespace=false}", rendered);
 }

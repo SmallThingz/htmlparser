@@ -6,6 +6,11 @@ const tables = @import("tables.zig");
 pub const TagEnd = struct {
     gt_index: usize,
     attr_end: usize,
+
+    /// Formats this tag end summary for human-readable output.
+    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+        try writer.print("TagEnd{{gt_index={}, attr_end={}}}", .{ self.gt_index, self.attr_end });
+    }
 };
 
 /// Finds `needle` byte in `hay` from `start`, using SIMD where available.
@@ -275,4 +280,11 @@ test "findSvgSubtreeEnd returns null when subtree is unterminated" {
     const s = "<svg><g><path></g>";
     const open_gt = findByte(s, 0, '>') orelse return error.TestUnexpectedResult;
     try std.testing.expect(findSvgSubtreeEnd(s, open_gt + 1) == null);
+}
+
+test "format tag end" {
+    const alloc = std.testing.allocator;
+    const rendered = try std.fmt.allocPrint(alloc, "{f}", .{TagEnd{ .gt_index = 10, .attr_end = 7 }});
+    defer alloc.free(rendered);
+    try std.testing.expectEqualStrings("TagEnd{gt_index=10, attr_end=7}", rendered);
 }

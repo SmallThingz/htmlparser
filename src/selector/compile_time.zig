@@ -43,6 +43,11 @@ pub const ComptimeAllocator = struct {
     pub fn free(_: *anyopaque, memory: []u8, alignment: Alignment, ret_addr: usize) void {
         _ = .{ memory, alignment, ret_addr };
     }
+
+    /// Formats this allocator marker for human-readable output.
+    pub fn format(_: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+        try writer.writeAll("ComptimeAllocator{}");
+    }
 };
 
 /// Compiles selector source at comptime into a fully materialized AST.
@@ -120,4 +125,11 @@ test "compile-time parser supports leading combinator and nth-child variants" {
     try std.testing.expectEqual(@as(usize, 2), nth.compounds.len);
     try std.testing.expect(nth.compounds[1].combinator == .descendant);
     try std.testing.expectEqual(@as(u32, 1), nth.compounds[1].pseudo_len);
+}
+
+test "format comptime allocator marker" {
+    const alloc = std.testing.allocator;
+    const rendered = try std.fmt.allocPrint(alloc, "{f}", .{ComptimeAllocator{}});
+    defer alloc.free(rendered);
+    try std.testing.expectEqualStrings("ComptimeAllocator{}", rendered);
 }

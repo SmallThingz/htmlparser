@@ -33,6 +33,11 @@ pub const NodeType = enum(u3) {
     document,
     element,
     text,
+
+    /// Formats this node type for human-readable output.
+    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+        try writer.writeAll(@tagName(self));
+    }
 };
 
 const isElementLike = common.isElementLike;
@@ -41,6 +46,11 @@ const isElementLike = common.isElementLike;
 pub const ParseOptions = struct {
     // In fastest-mode style runs, whitespace-only text nodes can be dropped.
     drop_whitespace_text_nodes: bool = true,
+
+    /// Formats parse options for human-readable output.
+    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+        try writer.print("ParseOptions{{drop_whitespace_text_nodes={}}}", .{self.drop_whitespace_text_nodes});
+    }
 
     /// Returns the raw node storage layout used by `Document.nodes`.
     pub fn GetNodeRaw(_: @This()) type {
@@ -86,6 +96,11 @@ pub const ParseOptions = struct {
             /// Writes HTML serialization of this node and its subtree to `writer`.
             pub fn writeHtml(self: @This(), writer: anytype) node_api.WriterError(@TypeOf(writer))!void {
                 return node_api.writeHtml(self, writer);
+            }
+
+            /// Writes HTML serialization of this node only, excluding its children.
+            pub fn writeHtmlSelf(self: @This(), writer: anytype) node_api.WriterError(@TypeOf(writer))!void {
+                return node_api.writeHtmlSelf(self, writer);
             }
 
             /// Default formatter uses HTML serialization for this node.
@@ -231,6 +246,15 @@ pub const ParseOptions = struct {
                 }
                 return null;
             }
+
+            /// Formats iterator state for human-readable output.
+            pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+                try writer.print("QueryIter{{scope_root={}, next_index={}, runtime_generation={}}}", .{
+                    self.scope_root,
+                    self.next_index,
+                    self.runtime_generation,
+                });
+            }
         };
     }
 
@@ -256,6 +280,11 @@ pub const ParseOptions = struct {
                 while (self.next()) |idx| {
                     try out.append(allocator, idx);
                 }
+            }
+
+            /// Formats iterator state for human-readable output.
+            pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+                try writer.print("ChildrenIter{{next_idx={}}}", .{self.next_idx});
             }
         };
     }
@@ -490,6 +519,11 @@ pub const ParseOptions = struct {
             /// Writes HTML serialization of this node and its subtree to `writer`.
             pub fn writeHtml(self: @This(), writer: anytype) node_api.WriterError(@TypeOf(writer))!void {
                 return node_api.writeHtml(self.nodeAt(0).?, writer);
+            }
+
+            /// Writes HTML serialization of this document root only, excluding its children.
+            pub fn writeHtmlSelf(self: @This(), writer: anytype) node_api.WriterError(@TypeOf(writer))!void {
+                return node_api.writeHtmlSelf(self.nodeAt(0).?, writer);
             }
 
             /// Default formatter uses HTML serialization for this node.
@@ -760,6 +794,11 @@ pub const Span = struct {
     /// Borrows mutable bytes referenced by this span.
     pub fn sliceMut(self: @This(), source: []u8) []u8 {
         return source[self.start..self.end];
+    }
+
+    /// Formats this span for human-readable output.
+    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+        try writer.print("Span{{start={}, end={}}}", .{ self.start, self.end });
     }
 };
 
@@ -2005,4 +2044,43 @@ test "instrumentation wrappers invoke compile-time hooks and preserve results" {
     try std.testing.expectEqual(@as(?bool, null), hooks.last_query_stats.matched);
     try std.testing.expect(hooks.query_start_calls >= 4);
     try std.testing.expect(hooks.query_end_calls >= 4);
+}
+
+test "format document types" {
+    const alloc = std.testing.allocator;
+
+    const node_type_out = try std.fmt.allocPrint(alloc, "{f}", .{NodeType.element});
+    defer alloc.free(node_type_out);
+    try std.testing.expectEqualStrings("element", node_type_out);
+
+    const opts: ParseOptions = .{ .drop_whitespace_text_nodes = false };
+    const opts_out = try std.fmt.allocPrint(alloc, "{f}", .{opts});
+    defer alloc.free(opts_out);
+    try std.testing.expectEqualStrings("ParseOptions{drop_whitespace_text_nodes=false}", opts_out);
+
+    const span: Span = .{ .start = 2, .end = 5 };
+    const span_out = try std.fmt.allocPrint(alloc, "{f}", .{span});
+    defer alloc.free(span_out);
+    try std.testing.expectEqualStrings("Span{start=2, end=5}", span_out);
+
+    var doc = Document.init(alloc);
+    defer doc.deinit();
+    var src = "<div><span></span><span></span></div>".*;
+    try doc.parse(&src, .{});
+
+    const div = doc.queryOne("div") orelse return error.TestUnexpectedResult;
+
+    const qit = div.queryAll("span");
+    const qit_out = try std.fmt.allocPrint(alloc, "{f}", .{qit});
+    defer alloc.free(qit_out);
+    try std.testing.expectEqualStrings("QueryIter{scope_root=1, next_index=2, runtime_generation=0}", qit_out);
+
+    const cit = div.children();
+    const cit_out = try std.fmt.allocPrint(alloc, "{f}", .{cit});
+    defer alloc.free(cit_out);
+    try std.testing.expectEqualStrings("ChildrenIter{next_idx=2}", cit_out);
+
+    const doc_out = try std.fmt.allocPrint(alloc, "{f}", .{doc});
+    defer alloc.free(doc_out);
+    try std.testing.expectEqualStrings("<div><span></span><span></span></div>", doc_out);
 }

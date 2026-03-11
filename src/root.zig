@@ -215,3 +215,22 @@ test "writeHtml parses and prints complex document" {
         rendered,
     );
 }
+
+test "writeHtmlSelf excludes children" {
+    const alloc = std.testing.allocator;
+    const opts: ParseOptions = .{};
+    const Document = opts.GetDocument();
+
+    var doc = Document.init(alloc);
+    defer doc.deinit();
+
+    var src = "<div id='a'><span>v</span></div>".*;
+    try doc.parse(&src, .{});
+
+    const div = doc.queryOne("div") orelse return error.TestUnexpectedResult;
+
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(alloc);
+    try div.writeHtmlSelf(out.writer(alloc));
+    try std.testing.expectEqualStrings("<div id='a'>", out.items);
+}

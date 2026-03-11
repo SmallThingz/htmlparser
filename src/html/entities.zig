@@ -6,6 +6,14 @@ pub const Decoded = struct {
     consumed: usize,
     bytes: [4]u8,
     len: usize,
+
+    /// Formats this decoded entity result for human-readable output.
+    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+        try writer.print(
+            "Decoded{{consumed={}, len={}, bytes=[{d},{d},{d},{d}]}}",
+            .{ self.consumed, self.len, self.bytes[0], self.bytes[1], self.bytes[2], self.bytes[3] },
+        );
+    }
 };
 
 /// Decodes entities in-place over entire slice and returns new length.
@@ -131,4 +139,16 @@ test "decode entities" {
     var buf = "a&amp;b&#x20;".*;
     const n = decodeInPlace(&buf);
     try std.testing.expectEqualStrings("a&b ", buf[0..n]);
+}
+
+test "format decoded entity" {
+    const alloc = std.testing.allocator;
+    const decoded: Decoded = .{
+        .consumed = 3,
+        .bytes = .{ 1, 2, 3, 4 },
+        .len = 2,
+    };
+    const rendered = try std.fmt.allocPrint(alloc, "{f}", .{decoded});
+    defer alloc.free(rendered);
+    try std.testing.expectEqualStrings("Decoded{consumed=3, len=2, bytes=[1,2,3,4]}", rendered);
 }

@@ -22,6 +22,11 @@ pub const DebugFailureKind = enum(u8) {
     not_simple,
     combinator,
     scope,
+
+    /// Formats this failure kind for human-readable output.
+    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+        try writer.writeAll(@tagName(self));
+    }
 };
 
 /// First failing predicate metadata for a candidate node.
@@ -35,12 +40,29 @@ pub const Failure = struct {
     pub fn isNone(self: @This()) bool {
         return self.kind == .none;
     }
+
+    /// Formats this failure record for human-readable output.
+    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+        try writer.print("Failure{{kind={s}, group_index={}, compound_index={}, predicate_index={}}}", .{
+            @tagName(self.kind),
+            self.group_index,
+            self.compound_index,
+            self.predicate_index,
+        });
+    }
 };
 
 /// Single non-matching node with its first failure reason.
 pub const NearMiss = struct {
     node_index: u32 = InvalidIndex,
     reason: Failure = .{},
+
+    /// Formats this near-miss record for human-readable output.
+    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+        try writer.print("NearMiss{{node_index={}, reason=", .{self.node_index});
+        try self.reason.format(writer);
+        try writer.writeAll("}");
+    }
 };
 
 /// Fixed-capacity diagnostic report filled by debug query APIs.
@@ -82,6 +104,23 @@ pub const QueryDebugReport = struct {
             .reason = reason,
         };
         self.near_miss_len += 1;
+    }
+
+    /// Formats summary debug report data for human-readable output.
+    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+        try writer.print(
+            "QueryDebugReport{{selector_source=\"{s}\", scope_root={}, visited_elements={}, matched_index={}, matched_group={}, runtime_parse_error={}, group_count={}, near_miss_len={}}}",
+            .{
+                self.selector_source,
+                self.scope_root,
+                self.visited_elements,
+                self.matched_index,
+                self.matched_group,
+                self.runtime_parse_error,
+                self.group_count,
+                self.near_miss_len,
+            },
+        );
     }
 };
 
@@ -158,4 +197,53 @@ pub inline fn appendAlloc(comptime T: type, noalias list: *std.ArrayListUnmanage
     }
 
     list.appendAssumeCapacity(value);
+}
+
+test "format debug report types" {
+    const alloc = std.testing.allocator;
+
+    const kind_out = try std.fmt.allocPrint(alloc, "{f}", .{DebugFailureKind.attr});
+    defer alloc.free(kind_out);
+    try std.testing.expectEqualStrings("attr", kind_out);
+
+    const failure: Failure = .{
+        .kind = .class,
+        .group_index = 1,
+        .compound_index = 2,
+        .predicate_index = 3,
+    };
+    const failure_out = try std.fmt.allocPrint(alloc, "{f}", .{failure});
+    defer alloc.free(failure_out);
+    try std.testing.expectEqualStrings(
+        "Failure{kind=class, group_index=1, compound_index=2, predicate_index=3}",
+        failure_out,
+    );
+
+    const near: NearMiss = .{
+        .node_index = 42,
+        .reason = failure,
+    };
+    const near_out = try std.fmt.allocPrint(alloc, "{f}", .{near});
+    defer alloc.free(near_out);
+    try std.testing.expectEqualStrings(
+        "NearMiss{node_index=42, reason=Failure{kind=class, group_index=1, compound_index=2, predicate_index=3}}",
+        near_out,
+    );
+
+    var report: QueryDebugReport = .{};
+    report.selector_source = "div";
+    report.scope_root = 7;
+    report.visited_elements = 3;
+    report.matched_index = 9;
+    report.matched_group = 1;
+    report.runtime_parse_error = true;
+    report.group_count = 2;
+    report.near_miss_len = 1;
+
+    const report_out = try std.fmt.allocPrint(alloc, "{f}", .{report});
+    defer alloc.free(report_out);
+    try std.testing.expectEqualStrings(
+        "QueryDebugReport{selector_source=\"div\", scope_root=7, visited_elements=3, matched_index=9, matched_group=1, runtime_parse_error=true, group_count=2, near_miss_len=1}",
+        report_out,
+    );
 }

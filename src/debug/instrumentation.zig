@@ -8,6 +8,11 @@ pub const QueryInstrumentationKind = enum(u8) {
     one_cached,
     all_runtime,
     all_cached,
+
+    /// Formats this query kind for human-readable output.
+    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+        try writer.writeAll(@tagName(self));
+    }
 };
 
 /// Timing/count payload emitted after `parseWithHooks`.
@@ -15,6 +20,15 @@ pub const ParseInstrumentationStats = struct {
     elapsed_ns: u64,
     input_len: usize,
     node_count: usize,
+
+    /// Formats parse timing statistics for human-readable output.
+    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+        try writer.print("ParseInstrumentationStats{{elapsed_ns={}, input_len={}, node_count={}}}", .{
+            self.elapsed_ns,
+            self.input_len,
+            self.node_count,
+        });
+    }
 };
 
 /// Timing payload emitted after query hook wrappers.
@@ -23,6 +37,16 @@ pub const QueryInstrumentationStats = struct {
     selector_len: usize,
     kind: QueryInstrumentationKind,
     matched: ?bool = null,
+
+    /// Formats query timing statistics for human-readable output.
+    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+        try writer.print("QueryInstrumentationStats{{elapsed_ns={}, selector_len={}, kind={s}, matched={?}}}", .{
+            self.elapsed_ns,
+            self.selector_len,
+            @tagName(self.kind),
+            self.matched,
+        });
+    }
 };
 
 fn elapsedNs(start: i128, finish: i128) u64 {
@@ -161,4 +185,37 @@ pub fn queryAllCachedWithHooks(doc: anytype, sel: *const ast.Selector, hooks: an
         });
     }
     return iter;
+}
+
+test "format instrumentation stats" {
+    const alloc = std.testing.allocator;
+
+    const kind_out = try std.fmt.allocPrint(alloc, "{f}", .{QueryInstrumentationKind.one_runtime});
+    defer alloc.free(kind_out);
+    try std.testing.expectEqualStrings("one_runtime", kind_out);
+
+    const parse_stats: ParseInstrumentationStats = .{
+        .elapsed_ns = 120,
+        .input_len = 33,
+        .node_count = 9,
+    };
+    const parse_out = try std.fmt.allocPrint(alloc, "{f}", .{parse_stats});
+    defer alloc.free(parse_out);
+    try std.testing.expectEqualStrings(
+        "ParseInstrumentationStats{elapsed_ns=120, input_len=33, node_count=9}",
+        parse_out,
+    );
+
+    const query_stats: QueryInstrumentationStats = .{
+        .elapsed_ns = 456,
+        .selector_len = 7,
+        .kind = .all_cached,
+        .matched = true,
+    };
+    const query_out = try std.fmt.allocPrint(alloc, "{f}", .{query_stats});
+    defer alloc.free(query_out);
+    try std.testing.expectEqualStrings(
+        "QueryInstrumentationStats{elapsed_ns=456, selector_len=7, kind=all_cached, matched=true}",
+        query_out,
+    );
 }
