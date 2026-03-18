@@ -351,7 +351,6 @@ const ReadmeBenchSnapshot = struct {
 const ExternalSuiteCounts = struct {
     total: usize,
     passed: usize,
-    failed: usize,
 };
 
 const ExternalSuiteMode = struct {
@@ -802,6 +801,10 @@ fn parseAverageRows(alloc: std.mem.Allocator, snap: ReadmeBenchSnapshot) ![]Pars
     return rows.toOwnedSlice(alloc);
 }
 
+fn failedCount(summary: anytype) usize {
+    return summary.total - summary.passed;
+}
+
 fn writeConformanceRow(
     w: anytype,
     profile: []const u8,
@@ -814,27 +817,27 @@ fn writeConformanceRow(
         profile,
         nw.passed,
         nw.total,
-        nw.failed,
+        failedCount(nw),
         qw.passed,
         qw.total,
-        qw.failed,
+        failedCount(qw),
         html5lib.passed,
         html5lib.total,
-        html5lib.failed,
+        failedCount(html5lib),
         whatwg.passed,
         whatwg.total,
-        whatwg.failed,
+        failedCount(whatwg),
     });
 }
 
 fn parserHtml5libCounts(mode: ExternalSuiteMode) ExternalSuiteCounts {
     if (mode.parser_suites) |s| return s.html5lib_subset;
-    return .{ .total = 0, .passed = 0, .failed = 0 };
+    return .{ .total = 0, .passed = 0 };
 }
 
 fn parserWhatwgCounts(mode: ExternalSuiteMode) ExternalSuiteCounts {
     if (mode.parser_suites) |s| return s.whatwg_html_parsing;
-    return .{ .total = 0, .passed = 0, .failed = 0 };
+    return .{ .total = 0, .passed = 0 };
 }
 
 fn sameExternalMode(a: ExternalSuiteMode, b: ExternalSuiteMode) bool {
@@ -845,16 +848,12 @@ fn sameExternalMode(a: ExternalSuiteMode, b: ExternalSuiteMode) bool {
 
     return a.selector_suites.nwmatcher.total == b.selector_suites.nwmatcher.total and
         a.selector_suites.nwmatcher.passed == b.selector_suites.nwmatcher.passed and
-        a.selector_suites.nwmatcher.failed == b.selector_suites.nwmatcher.failed and
         a.selector_suites.qwery_contextual.total == b.selector_suites.qwery_contextual.total and
         a.selector_suites.qwery_contextual.passed == b.selector_suites.qwery_contextual.passed and
-        a.selector_suites.qwery_contextual.failed == b.selector_suites.qwery_contextual.failed and
         a_html5.total == b_html5.total and
         a_html5.passed == b_html5.passed and
-        a_html5.failed == b_html5.failed and
         a_whatwg.total == b_whatwg.total and
-        a_whatwg.passed == b_whatwg.passed and
-        a_whatwg.failed == b_whatwg.failed;
+        a_whatwg.passed == b_whatwg.passed;
 }
 
 fn renderReadmeAutoSummary(io: std.Io, alloc: std.mem.Allocator) ![]u8 {
@@ -1546,14 +1545,12 @@ const QwCase = struct {
 const SelectorSuiteSummary = struct {
     total: usize,
     passed: usize,
-    failed: usize,
     examples: []const []const u8,
 };
 
 const ParserSuiteSummary = struct {
     total: usize,
     passed: usize,
-    failed: usize,
     examples: []const []const u8,
 };
 
@@ -1858,13 +1855,11 @@ fn runSelectorSuites(io: std.Io, alloc: std.mem.Allocator, mode: []const u8) !Se
         .nw = .{
             .total = @min(nw_cases.len, 140),
             .passed = nw_passed,
-            .failed = @min(nw_cases.len, 140) - nw_passed,
             .examples = try nw_examples.toOwnedSlice(alloc),
         },
         .qw = .{
             .total = qw_cases.len,
             .passed = qw_passed,
-            .failed = qw_cases.len - qw_passed,
             .examples = try qw_examples.toOwnedSlice(alloc),
         },
         .nw_failures = try nw_failures.toOwnedSlice(alloc),
@@ -2138,7 +2133,6 @@ fn runParserCases(io: std.Io, alloc: std.mem.Allocator, mode: []const u8, cases:
         .summary = .{
             .total = limit,
             .passed = passed,
-            .failed = limit - passed,
             .examples = try examples.toOwnedSlice(alloc),
         },
         .failures = try failures.toOwnedSlice(alloc),
@@ -2251,7 +2245,6 @@ fn runWptParserSuite(io: std.Io, alloc: std.mem.Allocator, mode: []const u8, max
             .summary = .{
                 .total = total,
                 .passed = 0,
-                .failed = total,
                 .examples = try examples.toOwnedSlice(alloc),
             },
             .failures = try failures.toOwnedSlice(alloc),
@@ -2330,18 +2323,18 @@ fn runExternalSuites(io: std.Io, alloc: std.mem.Allocator, args: []const [:0]con
 
         std.debug.print("Mode: {s}\n", .{mode});
         std.debug.print("  Selector suites:\n", .{});
-        std.debug.print("    nwmatcher: {d}/{d} passed ({d} failed)\n", .{ sel.nw.passed, sel.nw.total, sel.nw.failed });
-        std.debug.print("    qwery_contextual: {d}/{d} passed ({d} failed)\n", .{ sel.qw.passed, sel.qw.total, sel.qw.failed });
+        std.debug.print("    nwmatcher: {d}/{d} passed ({d} failed)\n", .{ sel.nw.passed, sel.nw.total, failedCount(sel.nw) });
+        std.debug.print("    qwery_contextual: {d}/{d} passed ({d} failed)\n", .{ sel.qw.passed, sel.qw.total, failedCount(sel.qw) });
         std.debug.print("  Parser suites:\n", .{});
         std.debug.print("    html5lib tree-construction subset: {d}/{d} passed ({d} failed)\n", .{
             parser_html5lib.summary.passed,
             parser_html5lib.summary.total,
-            parser_html5lib.summary.failed,
+            failedCount(parser_html5lib.summary),
         });
         std.debug.print("    WHATWG HTML parsing (WPT html5lib_* corpus): {d}/{d} passed ({d} failed)\n", .{
             parser_whatwg.summary.passed,
             parser_whatwg.summary.total,
-            parser_whatwg.summary.failed,
+            failedCount(parser_whatwg.summary),
         });
     }
 
@@ -2355,18 +2348,18 @@ fn runExternalSuites(io: std.Io, alloc: std.mem.Allocator, args: []const [:0]con
         try jw.print("\"selector_suites\":{{\"nwmatcher\":{{\"total\":{d},\"passed\":{d},\"failed\":{d}}},\"qwery_contextual\":{{\"total\":{d},\"passed\":{d},\"failed\":{d}}}}},", .{
             mr.nw.total,
             mr.nw.passed,
-            mr.nw.failed,
+            failedCount(mr.nw),
             mr.qw.total,
             mr.qw.passed,
-            mr.qw.failed,
+            failedCount(mr.qw),
         });
         try jw.print("\"parser_suites\":{{\"html5lib_subset\":{{\"total\":{d},\"passed\":{d},\"failed\":{d}}},\"whatwg_html_parsing\":{{\"total\":{d},\"passed\":{d},\"failed\":{d}}}}}", .{
             mr.parser_html5lib.total,
             mr.parser_html5lib.passed,
-            mr.parser_html5lib.failed,
+            failedCount(mr.parser_html5lib),
             mr.parser_whatwg.total,
             mr.parser_whatwg.passed,
-            mr.parser_whatwg.failed,
+            failedCount(mr.parser_whatwg),
         });
         try jw.writeAll("}");
     }

@@ -148,10 +148,6 @@ fn printHelp() void {
     );
 }
 
-const TestInfo = struct {
-    name: []const u8,
-};
-
 const Status = enum {
     pass,
     fail,
@@ -176,14 +172,14 @@ fn runAllTests(
     jobs: ?usize,
     seed: ?u32,
 ) !void {
-    var tests: std.ArrayList(TestInfo) = .empty;
+    var tests: std.ArrayList([]const u8) = .empty;
     defer tests.deinit(gpa);
 
     for (builtin.test_functions) |t| {
         if (filter) |f| {
             if (std.mem.indexOf(u8, t.name, f) == null) continue;
         }
-        try tests.append(gpa, .{ .name = t.name });
+        try tests.append(gpa, t.name);
     }
 
     if (tests.items.len == 0) {
@@ -239,7 +235,7 @@ const WorkerCtx = struct {
     gpa: std.mem.Allocator,
     io: std.Io,
     argv0: []const u8,
-    tests: []const TestInfo,
+    tests: []const []const u8,
     seed: ?u32,
     next_index: *std.atomic.Value(usize),
     summary: *Summary,
@@ -252,7 +248,7 @@ fn worker(ctx: *WorkerCtx) void {
         const idx = ctx.next_index.fetchAdd(1, .seq_cst);
         if (idx >= ctx.tests.len) break;
 
-        const test_name = ctx.tests[idx].name;
+        const test_name = ctx.tests[idx];
         const result = runChildTest(ctx, test_name) catch |err| {
             ctx.print_mutex.lockUncancelable(ctx.io);
             defer ctx.print_mutex.unlock(ctx.io);
