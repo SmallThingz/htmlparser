@@ -2,7 +2,7 @@ const std = @import("std");
 const root = @import("htmlparser");
 const default_options: root.ParseOptions = .{};
 const Document = default_options.GetDocument();
-const parse_mode = @import("../parse_mode.zig");
+const parse_mode = @import("parse_mode");
 const ParseMode = parse_mode.ParseMode;
 
 fn elapsedNs(start: i96, finish: i96) u64 {

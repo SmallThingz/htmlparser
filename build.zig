@@ -30,6 +30,14 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "htmlparser", .module = mod },
+                .{ .name = "parse_mode", .module = b.createModule(.{
+                    .root_source_file = b.path("tools/parse_mode.zig"),
+                    .target = target,
+                    .optimize = optimize,
+                    .imports = &.{
+                        .{ .name = "htmlparser", .module = mod },
+                    },
+                }) },
             },
         }),
     });

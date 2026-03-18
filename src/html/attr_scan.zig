@@ -56,7 +56,7 @@ pub fn parseRawValue(source: []const u8, span_end: usize, eq_index: usize) RawVa
     }
 
     const c = source[i];
-    if (c == '>' or c == '/') {
+    if (c == '>') {
         return .{ .kind = .empty, .start = i, .end = i, .next_start = i };
     }
 
@@ -69,7 +69,7 @@ pub fn parseRawValue(source: []const u8, span_end: usize, eq_index: usize) RawVa
     var j = i;
     while (j < span_end) : (j += 1) {
         const b = source[j];
-        if (b == '>' or b == '/' or tables.WhitespaceTable[b]) break;
+        if (b == '>' or tables.WhitespaceTable[b]) break;
     }
 
     if (j == i) {
@@ -184,6 +184,15 @@ test "parseRawValue handles quoted, naked, empty, and unterminated" {
         try testing.expectEqual(@as(usize, 2), raw.start);
         try testing.expectEqual(@as(usize, 5), raw.end);
         try testing.expectEqual(@as(usize, 5), raw.next_start);
+    }
+    {
+        const src = "a=/docs/v1/api";
+        const eq = std.mem.indexOfScalar(u8, src, '=') orelse return error.MissingEq;
+        const raw = parseRawValue(src, src.len, eq);
+        try testing.expectEqual(RawKind.naked, raw.kind);
+        try testing.expectEqual(@as(usize, 2), raw.start);
+        try testing.expectEqual(src.len, raw.end);
+        try testing.expectEqual(src.len, raw.next_start);
     }
     {
         const src = "a=   \"z\"";

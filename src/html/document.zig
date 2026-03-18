@@ -306,8 +306,8 @@ pub const ParseOptions = struct {
             allocator: std.mem.Allocator,
             source: []u8 = &[_]u8{},
 
-            nodes: std.ArrayListUnmanaged(RawNodeType) = .{},
-            parse_stack: std.ArrayListUnmanaged(u32) = .{},
+            nodes: std.ArrayListUnmanaged(RawNodeType) = .empty,
+            parse_stack: std.ArrayListUnmanaged(u32) = .empty,
 
             query_one_arena: ?std.heap.ArenaAllocator = null,
             query_all_arena: ?std.heap.ArenaAllocator = null,
@@ -320,8 +320,8 @@ pub const ParseOptions = struct {
             query_accel_id_disabled: bool = false,
             query_accel_tag_disabled: bool = false,
             query_accel_id_map: std.AutoHashMapUnmanaged(u64, u32) = .{},
-            query_accel_tag_entries: std.ArrayListUnmanaged(TagIndexEntry) = .{},
-            query_accel_tag_nodes: std.ArrayListUnmanaged(u32) = .{},
+            query_accel_tag_entries: std.ArrayListUnmanaged(TagIndexEntry) = .empty,
+            query_accel_tag_nodes: std.ArrayListUnmanaged(u32) = .empty,
 
             /// Initializes an empty document using `allocator` for internal storage.
             pub fn init(allocator: std.mem.Allocator) DocSelf {
@@ -1724,7 +1724,7 @@ test "children() iterator traverses sibling-chain indexes" {
 
     const root = doc.queryOne("div#root") orelse return error.TestUnexpectedResult;
     var kids = root.children();
-    var indexes: std.ArrayListUnmanaged(u32) = .{};
+    var indexes: std.ArrayListUnmanaged(u32) = .empty;
     defer indexes.deinit(alloc);
     try kids.collect(alloc, &indexes);
     try std.testing.expectEqual(@as(usize, 2), indexes.items.len);
@@ -1735,6 +1735,23 @@ test "children() iterator traverses sibling-chain indexes" {
     indexes.clearRetainingCapacity();
     try again.collect(alloc, &indexes);
     try std.testing.expectEqual(@as(usize, 2), indexes.items.len);
+}
+
+test "unquoted attribute values preserve slash characters" {
+    const alloc = std.testing.allocator;
+    var doc = Document.init(alloc);
+    defer doc.deinit();
+
+    var html = "<a id=x href=/docs/v1/api data-path=assets/img/logo.svg></a>".*;
+    try doc.parse(&html, .{});
+
+    const node = doc.queryOne("a#x") orelse return error.TestUnexpectedResult;
+    const href = node.getAttributeValue("href") orelse return error.TestUnexpectedResult;
+    const data_path = node.getAttributeValue("data-path") orelse return error.TestUnexpectedResult;
+
+    try std.testing.expectEqualStrings("/docs/v1/api", href);
+    try std.testing.expectEqualStrings("assets/img/logo.svg", data_path);
+    try std.testing.expect(doc.queryOne("a[href='/docs/v1/api'][data-path='assets/img/logo.svg']") != null);
 }
 
 test "moved document keeps node-scoped queries and navigation valid" {

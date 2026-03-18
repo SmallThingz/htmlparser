@@ -431,6 +431,12 @@ fn deinitOwnedStringList(alloc: std.mem.Allocator, list: *std.ArrayList([]const 
     list.deinit(alloc);
 }
 
+fn deinitOwnedStringSet(alloc: std.mem.Allocator, set: *std.StringHashMap(void)) void {
+    var it = set.keyIterator();
+    while (it.next()) |key_ptr| alloc.free(key_ptr.*);
+    set.deinit();
+}
+
 fn runIntCmd(io: std.Io, alloc: std.mem.Allocator, argv: []const []const u8) !u64 {
     const taskset_path: ?[]const u8 = blk: {
         if (common.fileExists(io, "/usr/bin/taskset")) break :blk "/usr/bin/taskset";
@@ -2639,9 +2645,12 @@ fn checkChangelogCompatibilityLabels(content: []const u8, ok: *bool) void {
 
 fn runDocsCheck(io: std.Io, alloc: std.mem.Allocator) !void {
     const markdown_files = try collectMarkdownFiles(io, alloc);
-    defer alloc.free(markdown_files);
+    defer {
+        for (markdown_files) |path| alloc.free(path);
+        alloc.free(markdown_files);
+    }
     var step_set = try loadBuildStepSet(io, alloc);
-    defer step_set.deinit();
+    defer deinitOwnedStringSet(alloc, &step_set);
 
     var ok = true;
     var checked: usize = 0;
@@ -2802,4 +2811,15 @@ test "owned string list cleanup frees entries" {
     try list.append(alloc, try alloc.dupe(u8, "one"));
     try list.append(alloc, try alloc.dupe(u8, "two"));
     deinitOwnedStringList(alloc, &list);
+}
+
+test "owned string set cleanup frees keys" {
+    const alloc = std.testing.allocator;
+    var empty = std.StringHashMap(void).init(alloc);
+    deinitOwnedStringSet(alloc, &empty);
+
+    var set = std.StringHashMap(void).init(alloc);
+    try set.put(try alloc.dupe(u8, "docs-check"), {});
+    try set.put(try alloc.dupe(u8, "examples-check"), {});
+    deinitOwnedStringSet(alloc, &set);
 }
