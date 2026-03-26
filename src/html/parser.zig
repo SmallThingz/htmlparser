@@ -313,8 +313,12 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
             const name_end = self.i;
             const close_name = self.input[name_start..name_end];
 
-            self.i = scanner.findByte(self.input, self.i, '>') orelse self.input.len;
-            if (self.i < self.input.len) self.i += 1;
+            if (self.i < self.input.len and self.input[self.i] == '>') {
+                self.i += 1;
+            } else {
+                self.i = scanner.findByte(self.input, self.i, '>') orelse self.input.len;
+                if (self.i < self.input.len) self.i += 1;
+            }
 
             if (close_name.len == 0) {
                 @branchHint(.cold);
