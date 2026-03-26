@@ -22,23 +22,23 @@ pub fn makeLowerTable() [256]u8 {
 }
 
 /// Returns whether byte is ASCII whitespace relevant to HTML tokenization.
-pub fn isWhitespace(c: u8) bool {
+fn isWhitespace(c: u8) bool {
     return c == ' ' or c == '\n' or c == '\r' or c == '\t' or c == '\x0c';
 }
 
 /// Returns whether byte is a valid identifier start.
-pub fn isIdentStart(c: u8) bool {
+fn isIdentStart(c: u8) bool {
     return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_' or c == ':';
 }
 
 /// Returns whether byte is a valid identifier continuation.
-pub fn isIdentChar(c: u8) bool {
+fn isIdentChar(c: u8) bool {
     return isIdentStart(c) or (c >= '0' and c <= '9') or c == '-' or c == '.';
 }
 
 /// Returns whether byte is consumed by the HTML tag-name state.
 /// Matches the tokenizer shape: continue until whitespace, `/`, `>`, or NUL.
-pub fn isTagNameChar(c: u8) bool {
+fn isTagNameChar(c: u8) bool {
     return !isWhitespace(c) and c != '/' and c != '>' and c != 0;
 }
 

@@ -25,7 +25,10 @@ fn parseFixtureDoc(io: std.Io, alloc: std.mem.Allocator, mode: ParseMode, fixtur
     var doc = Document.init(alloc);
     errdefer doc.deinit();
 
-    try parse_mode.parseDoc(&doc, working, mode);
+    switch (mode) {
+        .strictest => try doc.parse(working, .{ .drop_whitespace_text_nodes = false }),
+        .fastest => try doc.parse(working, .{ .drop_whitespace_text_nodes = true }),
+    }
     return .{ .doc = doc, .working = working };
 }
 

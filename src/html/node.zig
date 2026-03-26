@@ -67,7 +67,7 @@ pub fn parentNode(self: anytype) ?@TypeOf(self) {
     return self.doc.nodeAt(parent);
 }
 
-/// Returns direct-child index iterator for this node.
+/// Returns direct-child node iterator for this node.
 pub fn children(self: anytype) @TypeOf(self.doc.childrenIter(self.index)) {
     return self.doc.childrenIter(self.index);
 }
@@ -330,7 +330,9 @@ fn writeAttrsHtml(doc: anytype, noalias raw: anytype, writer: anytype) WriterErr
         }
 
         const name_start = i;
-        const name = attr_scan.scanAttrNameOrSkip(source, end, &i) orelse return;
+        const scanned = attr_scan.scanAttrNameOrSkip(source, end, i);
+        const name = scanned.name orelse return;
+        i = scanned.next_start;
         if (name.len == 0) continue;
         if (i >= end) {
             try writeAttrName(writer, name);

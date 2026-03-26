@@ -13,10 +13,3 @@ pub fn parseMode(s: []const u8) ?ParseMode {
     if (std.mem.eql(u8, s, "fastest")) return .fastest;
     return null;
 }
-
-pub fn parseDoc(noalias doc: *Document, input: []u8, mode: ParseMode) !void {
-    switch (mode) {
-        .strictest => try doc.parse(input, .{ .drop_whitespace_text_nodes = false }),
-        .fastest => try doc.parse(input, .{ .drop_whitespace_text_nodes = true }),
-    }
-}

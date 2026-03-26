@@ -28,6 +28,7 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
         i: usize,
 
         const Self = @This();
+        const OpenElem = Doc.OpenElemType;
 
         fn parse(noalias self: *Self) !void {
             try self.reserveCapacities();
@@ -36,7 +37,7 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
                 .kind = .document,
                 .subtree_end = 0,
             });
-            try self.pushStack(0);
+            try self.pushStack(0, 0, 0);
 
             try self.parseLoop(comptime opts.drop_whitespace_text_nodes);
             self.finishOpenElements();
@@ -77,8 +78,8 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
 
         fn finishOpenElements(noalias self: *Self) void {
             while (self.doc.parse_stack.items.len > 1) {
-                const idx = self.doc.parse_stack.pop().?;
-                var node = &self.doc.nodes.items[idx];
+                const open = self.doc.parse_stack.pop().?;
+                var node = &self.doc.nodes.items[open.idx];
                 node.subtree_end = @intCast(self.doc.nodes.items.len - 1);
             }
             self.doc.nodes.items[0].subtree_end = @intCast(self.doc.nodes.items.len - 1);
@@ -118,16 +119,10 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
 
         inline fn parseTextDropWhitespace(noalias self: *Self) !void {
             const start = self.i;
-            self.i = scanner.findByte(self.input, self.i, '<') orelse self.input.len;
+            const scanned = scanner.scanTextRun(self.input, self.i);
+            self.i = scanned.lt_index;
             if (self.i == start) return;
-
-            const text = self.input[start..self.i];
-            if (tables.WhitespaceTable[text[0]] and
-                tables.WhitespaceTable[text[text.len - 1]] and
-                isAllAsciiWhitespace(text))
-            {
-                return;
-            }
+            if (!scanned.has_non_whitespace) return;
 
             const parent_idx = self.currentParent();
             const node_idx = try self.appendNode(.text, parent_idx);
@@ -294,7 +289,7 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
                 return;
             }
 
-            try self.pushStack(node_idx);
+            try self.pushStack(node_idx, tag_name_key, @intCast(tag_name.len));
         }
 
         fn parseClosingTag(noalias self: *Self) void {
@@ -327,18 +322,12 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
             }
 
             if (self.doc.parse_stack.items.len > 1) {
-                const top_idx = self.doc.parse_stack.items[self.doc.parse_stack.items.len - 1];
-                const top = &self.doc.nodes.items[top_idx];
-                if (top.name_or_text.len() == close_name.len) {
-                    const top_name = top.name_or_text.slice(self.input);
-                    const top_key = tags.first8Key(top_name);
-                    const matches_top = tags.equalByLenAndKeyIgnoreCase(top_name, top_key, close_name, close_key);
-                    if (matches_top) {
-                        _ = self.doc.parse_stack.pop();
-                        var node = &self.doc.nodes.items[top_idx];
-                        node.subtree_end = @intCast(self.doc.nodes.items.len - 1);
-                        return;
-                    }
+                const top = self.doc.parse_stack.items[self.doc.parse_stack.items.len - 1];
+                if (self.openElemMatchesClose(top, close_name, close_key)) {
+                    _ = self.doc.parse_stack.pop();
+                    var node = &self.doc.nodes.items[top.idx];
+                    node.subtree_end = @intCast(self.doc.nodes.items.len - 1);
+                    return;
                 }
             }
 
@@ -346,21 +335,16 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
             var s = self.doc.parse_stack.items.len;
             while (s > 1) {
                 s -= 1;
-                const idx = self.doc.parse_stack.items[s];
-                const n = &self.doc.nodes.items[idx];
-                if (n.name_or_text.len() != close_name.len) continue;
-                const open_name = n.name_or_text.slice(self.input);
-                const open_key = tags.first8Key(open_name);
-                const matches = tags.equalByLenAndKeyIgnoreCase(open_name, open_key, close_name, close_key);
-                if (!matches) continue;
+                const open = self.doc.parse_stack.items[s];
+                if (!self.openElemMatchesClose(open, close_name, close_key)) continue;
                 found = s;
                 break;
             }
 
             if (found) |pos| {
                 while (self.doc.parse_stack.items.len > pos) {
-                    const idx = self.doc.parse_stack.pop().?;
-                    var node = &self.doc.nodes.items[idx];
+                    const open = self.doc.parse_stack.pop().?;
+                    var node = &self.doc.nodes.items[open.idx];
                     node.subtree_end = @intCast(self.doc.nodes.items.len - 1);
                 }
             } else {
@@ -370,15 +354,12 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
 
         inline fn applyImplicitClosures(noalias self: *Self, new_tag: []const u8, new_tag_key: u64) void {
             while (self.doc.parse_stack.items.len > 1) {
-                const top_idx = self.doc.parse_stack.items[self.doc.parse_stack.items.len - 1];
-                const top = &self.doc.nodes.items[top_idx];
-                const top_name = top.name_or_text.slice(self.input);
-                const top_key = tags.first8Key(top_name);
-                if (!tags.isImplicitCloseSourceWithKey(top_name, top_key)) break;
-                if (!tags.shouldImplicitlyCloseWithKeys(top_name, top_key, new_tag, new_tag_key)) break;
+                const top = self.doc.parse_stack.items[self.doc.parse_stack.items.len - 1];
+                if (!tags.isImplicitCloseSourceWithLenAndKey(top.tag_len, top.tag_key)) break;
+                if (!tags.shouldImplicitlyCloseWithLenAndKey(top.tag_len, top.tag_key, new_tag, new_tag_key)) break;
 
                 _ = self.doc.parse_stack.pop();
-                var n = &self.doc.nodes.items[top_idx];
+                var n = &self.doc.nodes.items[top.idx];
                 n.subtree_end = @intCast(self.doc.nodes.items.len - 1);
             }
         }
@@ -416,13 +397,24 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
             return @intCast(len);
         }
 
-        fn pushStack(noalias self: *Self, idx: u32) !void {
-            try appendAlloc(u32, &self.doc.parse_stack, self.doc.allocator, idx);
+        fn pushStack(noalias self: *Self, idx: u32, tag_key: u64, tag_len: u16) !void {
+            try appendAlloc(OpenElem, &self.doc.parse_stack, self.doc.allocator, .{
+                .idx = idx,
+                .tag_key = tag_key,
+                .tag_len = tag_len,
+            });
         }
 
         inline fn currentParent(noalias self: *Self) u32 {
             if (self.doc.parse_stack.items.len == 0) return InvalidIndex;
-            return self.doc.parse_stack.items[self.doc.parse_stack.items.len - 1];
+            return self.doc.parse_stack.items[self.doc.parse_stack.items.len - 1].idx;
+        }
+
+        inline fn openElemMatchesClose(noalias self: *Self, open: OpenElem, close_name: []const u8, close_key: u64) bool {
+            if (open.tag_len != close_name.len or open.tag_key != close_key) return false;
+            if (close_name.len <= 8) return true;
+            const open_name = self.doc.nodes.items[open.idx].name_or_text.slice(self.input);
+            return tables.eqlIgnoreCaseAscii(open_name[8..], close_name[8..]);
         }
 
         fn skipComment(noalias self: *Self) void {
@@ -527,11 +519,5 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
             return null;
         }
 
-        inline fn isAllAsciiWhitespace(bytes: []const u8) bool {
-            for (bytes) |c| {
-                if (!tables.WhitespaceTable[c]) return false;
-            }
-            return true;
-        }
     };
 }

@@ -22,6 +22,15 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const parse_mode_mod = b.createModule(.{
+        .root_source_file = b.path("tools/parse_mode.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "htmlparser", .module = mod },
+        },
+    });
+
     const bench_exe = b.addExecutable(.{
         .name = "htmlparser-bench",
         .root_module = b.createModule(.{
@@ -30,14 +39,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "htmlparser", .module = mod },
-                .{ .name = "parse_mode", .module = b.createModule(.{
-                    .root_source_file = b.path("tools/parse_mode.zig"),
-                    .target = target,
-                    .optimize = optimize,
-                    .imports = &.{
-                        .{ .name = "htmlparser", .module = mod },
-                    },
-                }) },
+                .{ .name = "parse_mode", .module = parse_mode_mod },
             },
         }),
     });
@@ -173,12 +175,27 @@ pub fn build(b: *std.Build) void {
     });
     const run_scripts_tests = b.addRunArtifact(scripts_tests);
 
+    const bench_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/bench/bench.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "htmlparser", .module = mod },
+                .{ .name = "parse_mode", .module = parse_mode_mod },
+            },
+        }),
+        .test_runner = .{ .path = b.path("tools/test_runner.zig"), .mode = .simple },
+    });
+    const run_bench_tests = b.addRunArtifact(bench_tests);
+
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_examples_tests.step);
     test_step.dependOn(&run_behavioral_tests.step);
     test_step.dependOn(&run_scripts_tests.step);
+    test_step.dependOn(&run_bench_tests.step);
 
     const ship_check_step = b.step("ship-check", "Run release-readiness checks (test + docs + examples)");
     ship_check_step.dependOn(test_step);

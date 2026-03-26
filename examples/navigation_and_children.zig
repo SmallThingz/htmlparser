@@ -18,13 +18,10 @@ pub fn run() !void {
     try std.testing.expectEqualStrings("body", last.getAttributeValue("id").?);
 
     var children = main.children();
-    var child_indexes: std.ArrayListUnmanaged(u32) = .empty;
-    defer child_indexes.deinit(std.testing.allocator);
-    try children.collect(std.testing.allocator, &child_indexes);
-    try std.testing.expectEqual(@as(usize, 3), child_indexes.items.len);
-    const first_idx = child_indexes.items[0];
-    const first_via_index = main.doc.nodeAt(first_idx) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("title", first_via_index.getAttributeValue("id").?);
+    const child_nodes = try children.collect(std.testing.allocator);
+    defer std.testing.allocator.free(child_nodes);
+    try std.testing.expectEqual(@as(usize, 3), child_nodes.len);
+    try std.testing.expectEqualStrings("title", child_nodes[0].getAttributeValue("id").?);
 }
 
 test "navigation and children iterator" {

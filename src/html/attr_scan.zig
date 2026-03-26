@@ -26,22 +26,27 @@ pub const ParsedValue = struct {
     next_start: usize,
 };
 
+pub const ScanAttrNameResult = struct {
+    name: ?[]const u8,
+    next_start: usize,
+};
+
 /// Scans the next attribute name starting at `i`.
 /// Returns null when the attribute list terminator is reached.
 /// Returns an empty slice when the cursor is advanced past a non-name byte.
-pub fn scanAttrNameOrSkip(source: []const u8, end: usize, i: *usize) ?[]const u8 {
+pub fn scanAttrNameOrSkip(source: []const u8, end: usize, start: usize) ScanAttrNameResult {
     std.debug.assert(end <= source.len);
-    std.debug.assert(i.* < end);
-    const c = source[i.*];
-    if (c == '>' or c == '/') return null;
+    std.debug.assert(start < end);
+    const c = source[start];
+    if (c == '>' or c == '/') return .{ .name = null, .next_start = start };
 
-    const name_start = i.*;
-    while (i.* < end and tables.IdentCharTable[source[i.*]]) : (i.* += 1) {}
-    if (i.* == name_start) {
-        i.* += 1;
-        return "";
+    var i = start;
+    const name_start = i;
+    while (i < end and tables.IdentCharTable[source[i]]) : (i += 1) {}
+    if (i == name_start) {
+        return .{ .name = "", .next_start = i + 1 };
     }
-    return source[name_start..i.*];
+    return .{ .name = source[name_start..i], .next_start = i };
 }
 
 /// Parses raw attribute value span for in-place attribute traversal.
@@ -141,26 +146,32 @@ test "scanAttrNameOrSkip handles terminators and skips non-name bytes" {
     {
         const src = "a=1";
         var i: usize = 0;
-        const name = scanAttrNameOrSkip(src, src.len, &i) orelse return error.UnexpectedNull;
+        const scanned = scanAttrNameOrSkip(src, src.len, i);
+        const name = scanned.name orelse return error.UnexpectedNull;
+        i = scanned.next_start;
         try testing.expectEqualStrings("a", name);
         try testing.expectEqual(@as(usize, 1), i);
     }
     {
         const src = "=a";
         var i: usize = 0;
-        const name = scanAttrNameOrSkip(src, src.len, &i) orelse return error.UnexpectedNull;
+        const scanned = scanAttrNameOrSkip(src, src.len, i);
+        const name = scanned.name orelse return error.UnexpectedNull;
+        i = scanned.next_start;
         try testing.expectEqual(@as(usize, 0), name.len);
         try testing.expectEqual(@as(usize, 1), i);
     }
     {
         const src = ">";
-        var i: usize = 0;
-        try testing.expect(scanAttrNameOrSkip(src, src.len, &i) == null);
+        const i: usize = 0;
+        const scanned = scanAttrNameOrSkip(src, src.len, i);
+        try testing.expect(scanned.name == null);
     }
     {
         const src = "/";
-        var i: usize = 0;
-        try testing.expect(scanAttrNameOrSkip(src, src.len, &i) == null);
+        const i: usize = 0;
+        const scanned = scanAttrNameOrSkip(src, src.len, i);
+        try testing.expect(scanned.name == null);
     }
 }
 

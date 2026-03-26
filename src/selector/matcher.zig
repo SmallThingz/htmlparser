@@ -300,38 +300,40 @@ fn firstMatchForGroup(comptime Doc: type, doc: *const Doc, selector: ast.Selecto
 
     if (EnableQueryAccel and @hasDecl(Doc, "queryAccelLookupId") and comp.hasId()) {
         const id = comp.id.slice(selector.source);
-        var used = false;
-        if (doc.queryAccelLookupId(id, &used)) |idx| {
-            if (inScope(doc, idx, scope_root) and matchGroupFromRight(Doc, doc, selector, group, rightmost, idx, scope_root)) {
-                return idx;
-            }
-            // Duplicate ids are common in real HTML. If the accelerated hit does not
-            // satisfy scope/other predicates, fall back to full scan semantics.
-        } else if (used) {
-            return null;
+        switch (doc.queryAccelLookupId(id)) {
+            .hit => |idx| {
+                if (inScope(doc, idx, scope_root) and matchGroupFromRight(Doc, doc, selector, group, rightmost, idx, scope_root)) {
+                    return idx;
+                }
+                // Duplicate ids are common in real HTML. If the accelerated hit does not
+                // satisfy scope/other predicates, fall back to full scan semantics.
+            },
+            .miss => return null,
+            .unavailable => {},
         }
     }
 
     if (EnableQueryAccel and @hasDecl(Doc, "queryAccelLookupTag") and comp.hasTag()) {
-        var used = false;
         const tag = comp.tag.slice(selector.source);
         const tag_key = if (comp.tag_key != 0) comp.tag_key else tags.first8Key(tag);
-        if (doc.queryAccelLookupTag(tag, tag_key, &used)) |candidates| {
-            if (scope_root != InvalidIndex) {
-                const scope_end = doc.nodes.items[scope_root].subtree_end;
+        switch (doc.queryAccelLookupTag(tag, tag_key)) {
+            .hit => |candidates| {
+                if (scope_root != InvalidIndex) {
+                    const scope_end = doc.nodes.items[scope_root].subtree_end;
+                    for (candidates) |idx| {
+                        if (idx <= scope_root) continue;
+                        if (idx > scope_end) break;
+                        if (matchGroupFromRight(Doc, doc, selector, group, rightmost, idx, scope_root)) return idx;
+                    }
+                    return null;
+                }
                 for (candidates) |idx| {
-                    if (idx <= scope_root) continue;
-                    if (idx > scope_end) break;
                     if (matchGroupFromRight(Doc, doc, selector, group, rightmost, idx, scope_root)) return idx;
                 }
                 return null;
-            }
-            for (candidates) |idx| {
-                if (matchGroupFromRight(Doc, doc, selector, group, rightmost, idx, scope_root)) return idx;
-            }
-            return null;
+            },
+            .unavailable => {},
         }
-        if (used) return null;
     }
 
     const bounds = traversalBounds(Doc, doc, scope_root);

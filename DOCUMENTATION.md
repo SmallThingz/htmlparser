@@ -83,7 +83,7 @@ All examples are verified by running `zig build examples-check`
   - `lastChild()`
   - `nextSibling()`
   - `prevSibling()`
-  - `children()` (borrowed `[]const u32` index view)
+  - `children()` (iterator of wrapped child nodes; `collect(allocator)` returns an owned `[]Node`)
 - Text:
   - `innerText(allocator)` (borrowed or allocated depending on shape)
   - `innerTextWithOptions(allocator, TextOptions)`

@@ -208,7 +208,12 @@ pub inline fn mayTriggerImplicitCloseWithKey(new_tag: []const u8, new_key: u64) 
 
 /// Returns true when `open_tag` is an optional-close source tag.
 pub fn isImplicitCloseSourceWithKey(open_tag: []const u8, open_key: u64) bool {
-    return switch (open_tag.len) {
+    return isImplicitCloseSourceWithLenAndKey(open_tag.len, open_key);
+}
+
+/// Returns true when `open_tag_len`/`open_key` represent an optional-close source tag.
+pub fn isImplicitCloseSourceWithLenAndKey(open_tag_len: usize, open_key: u64) bool {
+    return switch (open_tag_len) {
         1 => open_key == KEY.P,
         2 => switch (open_key) {
             KEY.LI,
@@ -234,7 +239,12 @@ pub fn isImplicitCloseSourceWithKey(open_tag: []const u8, open_key: u64) bool {
 
 /// Optional-close predicate with precomputed `(len,key)` fast path.
 pub fn shouldImplicitlyCloseWithKeys(open_tag: []const u8, open_key: u64, new_tag: []const u8, new_key: u64) bool {
-    return switch (open_tag.len) {
+    return shouldImplicitlyCloseWithLenAndKey(open_tag.len, open_key, new_tag, new_key);
+}
+
+/// Optional-close predicate with caller-provided open-tag length.
+pub fn shouldImplicitlyCloseWithLenAndKey(open_tag_len: usize, open_key: u64, new_tag: []const u8, new_key: u64) bool {
+    return switch (open_tag_len) {
         1 => open_key == KEY.P and closesPWithKey(new_tag, new_key),
         2 => switch (open_key) {
             KEY.LI => new_key == KEY.LI,

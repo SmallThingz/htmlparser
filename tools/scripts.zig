@@ -1889,9 +1889,18 @@ const ParserCase = struct {
     expected: []const []const u8,
 };
 
-fn parseHtml5libDat(io: std.Io, alloc: std.mem.Allocator, path: []const u8, out: *std.ArrayList(ParserCase)) !void {
+fn parseHtml5libDat(io: std.Io, alloc: std.mem.Allocator, path: []const u8) ![]ParserCase {
     const text = try common.readFileAlloc(io, alloc, path);
     defer alloc.free(text);
+    var out = std.ArrayList(ParserCase).empty;
+    errdefer {
+        for (out.items) |c| {
+            alloc.free(c.html);
+            for (c.expected) |tag| alloc.free(tag);
+            alloc.free(c.expected);
+        }
+        out.deinit(alloc);
+    }
     var blocks = std.mem.splitSequence(u8, text, "\n#data\n");
     while (blocks.next()) |raw_blk| {
         var blk = raw_blk;
@@ -1932,6 +1941,7 @@ fn parseHtml5libDat(io: std.Io, alloc: std.mem.Allocator, path: []const u8, out:
             .expected = try expected.toOwnedSlice(alloc),
         });
     }
+    return out.toOwnedSlice(alloc);
 }
 
 fn fromHex(c: u8) !u8 {
@@ -1994,12 +2004,22 @@ fn parseWptTreeExpected(alloc: std.mem.Allocator, decoded_tree: []const u8) ![]c
     return expected.toOwnedSlice(alloc);
 }
 
-fn parseWptHtmlSuiteFile(io: std.Io, alloc: std.mem.Allocator, path: []const u8, out: *std.ArrayList(ParserCase)) !void {
+fn parseWptHtmlSuiteFile(io: std.Io, alloc: std.mem.Allocator, path: []const u8) ![]ParserCase {
     const text = try common.readFileAlloc(io, alloc, path);
     defer alloc.free(text);
 
-    if (std.mem.indexOf(u8, text, "var tests = {") == null) return;
-    if (std.mem.indexOf(u8, text, "init_tests(") == null) return;
+    if (std.mem.indexOf(u8, text, "var tests = {") == null) return &.{};
+    if (std.mem.indexOf(u8, text, "init_tests(") == null) return &.{};
+
+    var out = std.ArrayList(ParserCase).empty;
+    errdefer {
+        for (out.items) |c| {
+            alloc.free(c.html);
+            for (c.expected) |tag| alloc.free(tag);
+            alloc.free(c.expected);
+        }
+        out.deinit(alloc);
+    }
 
     var pos: usize = 0;
     while (std.mem.indexOfPos(u8, text, pos, "[async_test(")) |mark| {
@@ -2039,6 +2059,7 @@ fn parseWptHtmlSuiteFile(io: std.Io, alloc: std.mem.Allocator, path: []const u8,
             .expected = expected,
         });
     }
+    return out.toOwnedSlice(alloc);
 }
 
 fn parseTagJsonArray(alloc: std.mem.Allocator, text: []const u8) ![]const []const u8 {
@@ -2167,7 +2188,9 @@ fn runHtml5libParserSuite(io: std.Io, alloc: std.mem.Allocator, mode: []const u8
     for (dat_names.items) |name| {
         const path = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ tc_dir, name });
         defer alloc.free(path);
-        try parseHtml5libDat(io, alloc, path, &cases);
+        const parsed_cases = try parseHtml5libDat(io, alloc, path);
+        defer alloc.free(parsed_cases);
+        try cases.appendSlice(alloc, parsed_cases);
     }
 
     return runParserCases(io, alloc, mode, cases.items, max_cases);
@@ -2208,7 +2231,9 @@ fn runWptParserSuite(io: std.Io, alloc: std.mem.Allocator, mode: []const u8, max
     for (html_names.items) |name| {
         const path = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ wpt_dir, name });
         defer alloc.free(path);
-        try parseWptHtmlSuiteFile(io, alloc, path, &cases);
+        const parsed_cases = try parseWptHtmlSuiteFile(io, alloc, path);
+        defer alloc.free(parsed_cases);
+        try cases.appendSlice(alloc, parsed_cases);
     }
 
     if (cases.items.len == 0 and html_names.items.len != 0) {
@@ -2473,54 +2498,54 @@ fn loadBuildStepSet(io: std.Io, alloc: std.mem.Allocator) !std.StringHashMap(voi
     return set;
 }
 
-fn validateMarkdownLink(io: std.Io, alloc: std.mem.Allocator, md_path: []const u8, line_no: usize, target_raw: []const u8, ok: *bool) !void {
+fn validateMarkdownLink(io: std.Io, alloc: std.mem.Allocator, md_path: []const u8, line_no: usize, target_raw: []const u8) !bool {
     var target = std.mem.trim(u8, target_raw, " \t\r");
     if (target.len >= 2 and target[0] == '<' and target[target.len - 1] == '>') {
         target = target[1 .. target.len - 1];
     }
-    if (target.len == 0) return;
+    if (target.len == 0) return true;
     if (target[0] != '<') {
         const ws_idx = std.mem.indexOfAny(u8, target, " \t\r") orelse target.len;
         target = target[0..ws_idx];
     }
-    if (target.len == 0) return;
-    if (target[0] == '#') return;
+    if (target.len == 0) return true;
+    if (target[0] == '#') return true;
     if (std.mem.startsWith(u8, target, "http://") or
         std.mem.startsWith(u8, target, "https://") or
         std.mem.startsWith(u8, target, "mailto:") or
         std.mem.startsWith(u8, target, "tel:") or
         std.mem.indexOf(u8, target, "://") != null)
     {
-        return;
+        return true;
     }
 
     const path_end = std.mem.indexOfAny(u8, target, "#?") orelse target.len;
     const path_only = target[0..path_end];
-    if (path_only.len == 0) return;
+    if (path_only.len == 0) return true;
 
     if (std.mem.startsWith(u8, path_only, "/")) {
         std.debug.print("docs-check: {s}:{d}: absolute markdown path is not allowed: {s}\n", .{ md_path, line_no, target });
-        ok.* = false;
-        return;
+        return false;
     }
 
     const base_dir = std.fs.path.dirname(md_path) orelse ".";
     const resolved = try std.fs.path.join(alloc, &[_][]const u8{ base_dir, path_only });
     defer alloc.free(resolved);
 
-    if (common.fileExists(io, resolved)) return;
+    if (common.fileExists(io, resolved)) return true;
 
     if (std.mem.endsWith(u8, path_only, "/")) {
         const with_readme = try std.fs.path.join(alloc, &[_][]const u8{ resolved, "README.md" });
         defer alloc.free(with_readme);
-        if (common.fileExists(io, with_readme)) return;
+        if (common.fileExists(io, with_readme)) return true;
     }
 
     std.debug.print("docs-check: {s}:{d}: unresolved markdown link: {s}\n", .{ md_path, line_no, target });
-    ok.* = false;
+    return false;
 }
 
-fn checkMarkdownLinks(io: std.Io, alloc: std.mem.Allocator, md_path: []const u8, content: []const u8, ok: *bool) !void {
+fn checkMarkdownLinks(io: std.Io, alloc: std.mem.Allocator, md_path: []const u8, content: []const u8) !bool {
+    var ok = true;
     var in_fence = false;
     var line_no: usize = 0;
     var lines = std.mem.splitScalar(u8, content, '\n');
@@ -2549,20 +2574,22 @@ fn checkMarkdownLinks(io: std.Io, alloc: std.mem.Allocator, md_path: []const u8,
                 i = close + 2;
                 continue;
             };
-            try validateMarkdownLink(io, alloc, md_path, line_no, line[close + 2 .. end], ok);
+            ok = (try validateMarkdownLink(io, alloc, md_path, line_no, line[close + 2 .. end])) and ok;
             i = end + 1;
         }
     }
+    return ok;
 }
 
-fn checkLocalAbsolutePaths(md_path: []const u8, content: []const u8, ok: *bool) void {
+fn checkLocalAbsolutePaths(md_path: []const u8, content: []const u8) bool {
     if (std.mem.indexOf(u8, content, "/home/") != null or
         std.mem.indexOf(u8, content, "/Users/") != null or
         std.mem.indexOf(u8, content, "C:\\Users\\") != null)
     {
         std.debug.print("docs-check: {s}: contains machine-local absolute path\n", .{md_path});
-        ok.* = false;
+        return false;
     }
+    return true;
 }
 
 fn parseStepAfterBuild(content: []const u8, start: usize) ?[]const u8 {
@@ -2582,7 +2609,8 @@ fn parseStepAfterBuild(content: []const u8, start: usize) ?[]const u8 {
     return null;
 }
 
-fn checkDocumentedBuildCommands(md_path: []const u8, content: []const u8, step_set: *const std.StringHashMap(void), ok: *bool) void {
+fn checkDocumentedBuildCommands(md_path: []const u8, content: []const u8, step_set: std.StringHashMap(void)) bool {
+    var ok = true;
     var pos: usize = 0;
     while (std.mem.indexOfPos(u8, content, pos, "zig build")) |found| {
         if (found > 0 and !std.ascii.isWhitespace(content[found - 1]) and content[found - 1] != '`') {
@@ -2602,18 +2630,18 @@ fn checkDocumentedBuildCommands(md_path: []const u8, content: []const u8, step_s
         };
         if (!step_set.contains(step)) {
             std.debug.print("docs-check: {s}: references unknown zig build step '{s}'\n", .{ md_path, step });
-            ok.* = false;
+            ok = false;
         }
         pos = found + 1;
     }
+    return ok;
 }
 
-fn checkChangelogCompatibilityLabels(content: []const u8, ok: *bool) void {
+fn checkChangelogCompatibilityLabels(content: []const u8) bool {
     const header = "## [Unreleased]";
     const start = std.mem.indexOf(u8, content, header) orelse {
         std.debug.print("docs-check: CHANGELOG.md: missing '## [Unreleased]' section\n", .{});
-        ok.* = false;
-        return;
+        return false;
     };
 
     const after = content[start + header.len ..];
@@ -2625,12 +2653,14 @@ fn checkChangelogCompatibilityLabels(content: []const u8, ok: *bool) void {
         "Migration:",
         "Downstream scope:",
     };
+    var ok = true;
     for (required) |needle| {
         if (std.mem.indexOf(u8, section, needle) == null) {
             std.debug.print("docs-check: CHANGELOG.md: Unreleased section missing compatibility label '{s}'\n", .{needle});
-            ok.* = false;
+            ok = false;
         }
     }
+    return ok;
 }
 
 fn runDocsCheck(io: std.Io, alloc: std.mem.Allocator) !void {
@@ -2649,11 +2679,11 @@ fn runDocsCheck(io: std.Io, alloc: std.mem.Allocator) !void {
         defer alloc.free(content);
         checked += 1;
 
-        checkLocalAbsolutePaths(md_path, content, &ok);
-        try checkMarkdownLinks(io, alloc, md_path, content, &ok);
-        checkDocumentedBuildCommands(md_path, content, &step_set, &ok);
+        ok = checkLocalAbsolutePaths(md_path, content) and ok;
+        ok = (try checkMarkdownLinks(io, alloc, md_path, content)) and ok;
+        ok = checkDocumentedBuildCommands(md_path, content, step_set) and ok;
         if (std.mem.eql(u8, md_path, "CHANGELOG.md")) {
-            checkChangelogCompatibilityLabels(content, &ok);
+            ok = checkChangelogCompatibilityLabels(content) and ok;
         }
     }
 

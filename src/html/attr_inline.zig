@@ -114,7 +114,9 @@ pub fn collectSelectedValues(noalias doc_ptr: anytype, node: anytype, selected_n
         while (i < end and tables.WhitespaceTable[source[i]]) : (i += 1) {}
         if (i >= end) break;
 
-        const name_slice = attr_scan.scanAttrNameOrSkip(source, end, &i) orelse break;
+        const scanned = attr_scan.scanAttrNameOrSkip(source, end, i);
+        const name_slice = scanned.name orelse break;
+        i = scanned.next_start;
         if (name_slice.len == 0) continue;
         const selected_idx = firstUnresolvedMatch(selected_names, out_values, name_slice);
 
@@ -370,7 +372,9 @@ test "materializeRawValue preserves traversal for following attrs" {
 
     var i = parsed.next_start;
     while (i < span_end and tables.WhitespaceTable[buf[i]]) : (i += 1) {}
-    const name = attr_scan.scanAttrNameOrSkip(&buf, span_end, &i) orelse return error.MissingAttr;
+    const scanned = attr_scan.scanAttrNameOrSkip(&buf, span_end, i);
+    const name = scanned.name orelse return error.MissingAttr;
+    i = scanned.next_start;
     try testing.expectEqualStrings("b", name);
 }
 

@@ -66,9 +66,15 @@ pub fn runParseFile(io: std.Io, path: []const u8, iterations: usize, mode: Parse
             defer doc.deinit();
             if (working_opt) |working| {
                 @memcpy(working, input);
-                try parse_mode.parseDoc(&doc, working, mode);
+                switch (mode) {
+                    .strictest => try doc.parse(working, .{ .drop_whitespace_text_nodes = false }),
+                    .fastest => try doc.parse(working, .{ .drop_whitespace_text_nodes = true }),
+                }
             } else {
-                try parse_mode.parseDoc(&doc, input, mode);
+                switch (mode) {
+                    .strictest => try doc.parse(input, .{ .drop_whitespace_text_nodes = false }),
+                    .fastest => try doc.parse(input, .{ .drop_whitespace_text_nodes = true }),
+                }
             }
         }
         _ = parse_arena.reset(.retain_capacity);
@@ -108,7 +114,10 @@ pub fn runQueryMatch(io: std.Io, path: []const u8, selector: []const u8, iterati
 
     var doc = Document.init(alloc);
     defer doc.deinit();
-    try parse_mode.parseDoc(&doc, working, mode);
+    switch (mode) {
+        .strictest => try doc.parse(working, .{ .drop_whitespace_text_nodes = false }),
+        .fastest => try doc.parse(working, .{ .drop_whitespace_text_nodes = true }),
+    }
 
     const start = nowNs(io);
     var i: usize = 0;
@@ -137,12 +146,15 @@ pub fn runQueryCached(io: std.Io, path: []const u8, selector: []const u8, iterat
 
     var doc = Document.init(alloc);
     defer doc.deinit();
-    try parse_mode.parseDoc(&doc, working, mode);
+    switch (mode) {
+        .strictest => try doc.parse(working, .{ .drop_whitespace_text_nodes = false }),
+        .fastest => try doc.parse(working, .{ .drop_whitespace_text_nodes = true }),
+    }
 
     const start = nowNs(io);
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
-        _ = doc.queryOneCached(&sel);
+        _ = doc.queryOneCached(sel);
     }
     const end = nowNs(io);
 
@@ -215,4 +227,20 @@ pub fn main(init: std.process.Init) !void {
     const iterations = try std.fmt.parseInt(usize, args[2], 10);
     const total_ns = try runParseFile(io, args[1], iterations, .fastest);
     std.debug.print("{d}\n", .{total_ns});
+}
+
+test "bench smoke uses parse_mode module for both parse modes" {
+    const alloc = std.testing.allocator;
+
+    var fastest_doc = Document.init(alloc);
+    defer fastest_doc.deinit();
+    var fastest_html = "<div><span id='x'>ok</span></div>".*;
+    try fastest_doc.parse(&fastest_html, .{ .drop_whitespace_text_nodes = true });
+    try std.testing.expect(fastest_doc.queryOne("span#x") != null);
+
+    var strict_doc = Document.init(alloc);
+    defer strict_doc.deinit();
+    var strict_html = "<div>\n  <span id='y'>ok</span>\n</div>".*;
+    try strict_doc.parse(&strict_html, .{ .drop_whitespace_text_nodes = false });
+    try std.testing.expect(strict_doc.queryOne("span#y") != null);
 }

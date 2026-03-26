@@ -120,7 +120,7 @@ pub fn queryOneRuntimeWithHooks(io: std.Io, doc: anytype, selector: []const u8, 
 }
 
 /// Executes `queryOneCached` and emits query timing hooks.
-pub fn queryOneCachedWithHooks(io: std.Io, doc: anytype, sel: *const ast.Selector, hooks: anytype) @TypeOf(doc.queryOneCached(sel)) {
+pub fn queryOneCachedWithHooks(io: std.Io, doc: anytype, sel: ast.Selector, hooks: anytype) @TypeOf(doc.queryOneCached(sel)) {
     if (comptime @hasDecl(HookDeclType(@TypeOf(hooks)), "onQueryStart")) {
         hooks.onQueryStart(.one_cached, sel.source.len);
     }
@@ -170,7 +170,7 @@ pub fn queryAllRuntimeWithHooks(io: std.Io, doc: anytype, selector: []const u8, 
 }
 
 /// Executes `queryAllCached` and emits query timing hooks.
-pub fn queryAllCachedWithHooks(io: std.Io, doc: anytype, sel: *const ast.Selector, hooks: anytype) @TypeOf(doc.queryAllCached(sel)) {
+pub fn queryAllCachedWithHooks(io: std.Io, doc: anytype, sel: ast.Selector, hooks: anytype) @TypeOf(doc.queryAllCached(sel)) {
     if (comptime @hasDecl(HookDeclType(@TypeOf(hooks)), "onQueryStart")) {
         hooks.onQueryStart(.all_cached, sel.source.len);
     }
