@@ -486,6 +486,7 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
             var j = scanner.findByte(self.input, start, '<') orelse return null;
             const tag_len = tag_name.len;
             if (tag_len == 0) return null;
+            const tag_key = tags.first8Key(tag_name);
             const first = tables.lower(tag_name[0]);
             while (j + 3 < self.input.len) {
                 if (self.input[j + 1] != '/') {
@@ -499,17 +500,22 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
 
                 var k = j + 2;
                 const name_start = k;
+                var close_key: u64 = 0;
+                var close_key_len: u8 = 0;
                 while (k < self.input.len and tables.TagNameCharTable[self.input[k]]) : (k += 1) {}
+                {
+                    var p = name_start;
+                    while (p < k and close_key_len < 8) : (p += 1) {
+                        close_key |= @as(u64, tables.lower(self.input[p])) << @as(u6, @intCast(close_key_len * 8));
+                        close_key_len += 1;
+                    }
+                }
                 if (k == name_start) {
                     j = scanner.findByte(self.input, j + 1, '<') orelse return null;
                     continue;
                 }
 
-                if (k - name_start != tag_len) {
-                    j = scanner.findByte(self.input, j + 1, '<') orelse return null;
-                    continue;
-                }
-                if (!tables.eqlIgnoreCaseAscii(self.input[name_start..k], tag_name)) {
+                if (k - name_start != tag_len or close_key != tag_key) {
                     j = scanner.findByte(self.input, j + 1, '<') orelse return null;
                     continue;
                 }
