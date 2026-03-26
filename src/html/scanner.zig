@@ -187,16 +187,7 @@ inline fn isSvgTagName(name: []const u8) bool {
 }
 
 inline fn findAny3Dispatch(hay: []const u8, start: usize) ?usize {
-    if (comptime builtin.cpu.arch == .x86_64 and std.Target.x86.featureSetHas(builtin.cpu.features, .avx2)) {
-        return findAny3Vec(32, hay, start);
-    }
-    if (comptime builtin.cpu.arch == .x86_64 and std.Target.x86.featureSetHas(builtin.cpu.features, .sse2)) {
-        return findAny3Vec(16, hay, start);
-    }
-    if (comptime builtin.cpu.arch == .aarch64) {
-        return findAny3Vec(16, hay, start);
-    }
-    return findAny3Scalar(hay, start);
+    return std.mem.indexOfAnyPos(u8, hay, start, ">'\"");
 }
 
 inline fn findAny3Scalar(hay: []const u8, start: usize) ?usize {
