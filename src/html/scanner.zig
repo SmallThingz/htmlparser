@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const tables = @import("tables.zig");
 
 // SAFETY: Scanners operate on byte slices and rely on caller-provided bounds.
@@ -187,43 +186,7 @@ inline fn isSvgTagName(name: []const u8) bool {
 }
 
 inline fn findAny3Dispatch(hay: []const u8, start: usize) ?usize {
-    return std.mem.indexOfAnyPos(u8, hay, start, ">'\"");
-}
-
-inline fn findAny3Scalar(hay: []const u8, start: usize) ?usize {
-    const a = '>';
-    const b = '"';
-    const c = '\'';
-    for (hay[start..], start..) |ch, i| {
-        if (ch == a or ch == b or ch == c) return i;
-    }
-    return null;
-}
-
-inline fn findAny3Vec(comptime lanes: comptime_int, hay: []const u8, start: usize) ?usize {
-    const a = '>';
-    const b = '"';
-    const c = '\'';
-    const Vec = @Vector(lanes, u8);
-    const a_vec: Vec = @splat(a);
-    const b_vec: Vec = @splat(b);
-    const c_vec: Vec = @splat(c);
-
-    var i = start;
-    while (i + lanes <= hay.len) : (i += lanes) {
-        const chunk: [lanes]u8 = hay[i..][0..lanes].*;
-        const vec: Vec = chunk;
-        const mask = (vec == a_vec) | (vec == b_vec) | (vec == c_vec);
-        if (@reduce(.Or, mask)) {
-            for (hay[i..], i..) |ch, j| {
-                if (ch == a or ch == b or ch == c) return j;
-            }
-            unreachable;
-        } else {
-            @branchHint(.likely);
-        }
-    }
-    return findAny3Scalar(hay, i);
+    return @call(.always_inline, std.mem.indexOfAnyPos, .{ u8, hay, start, ">'\"" });
 }
 
 test "findByte helper matches scalar behavior" {
