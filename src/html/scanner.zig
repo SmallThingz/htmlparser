@@ -25,8 +25,7 @@ pub const TextRun = struct {
 
 /// Finds `needle` byte in `hay` from `start`, using SIMD where available.
 pub fn findByte(hay: []const u8, start: usize, needle: u8) ?usize {
-    // return findByteDispatch(hay, start, needle);
-    return @call(.always_inline, indexOfScalarPos, .{ hay, start, needle });
+    return std.mem.indexOfScalarPos(u8, hay, start, needle);
 }
 
 /// Scans from `start` to the next `<`, tracking whether the run contains any non-whitespace bytes.
