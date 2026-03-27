@@ -26,17 +26,17 @@ const Hooks = struct {
     }
 };
 
-fn run() !void {
+pub fn run() !void {
     var doc = Document.init(std.testing.allocator);
     defer doc.deinit();
 
     var hooks: Hooks = .{};
     var input = "<div><span id='x'></span></div>".*;
-    try html.parseWithHooks(&doc, &input, .{}, &hooks);
+    try html.parseWithHooks(std.testing.io, &doc, &input, .{}, &hooks);
     try std.testing.expectEqual(@as(usize, 1), hooks.parse_start_calls);
     try std.testing.expectEqual(@as(usize, 1), hooks.parse_end_calls);
 
-    _ = try html.queryOneRuntimeWithHooks(&doc, "span#x", &hooks);
+    _ = try html.queryOneRuntimeWithHooks(std.testing.io, &doc, "span#x", &hooks);
     try std.testing.expectEqual(@as(usize, 1), hooks.query_start_calls);
     try std.testing.expectEqual(@as(usize, 1), hooks.query_end_calls);
 }

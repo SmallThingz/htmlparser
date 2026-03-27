@@ -164,12 +164,12 @@ fn getProfile(name: []const u8) !Profile {
     return error.InvalidProfile;
 }
 
-fn pathExists(path: []const u8) bool {
-    return common.fileExists(path);
+fn pathExists(io: std.Io, path: []const u8) bool {
+    return common.fileExists(io, path);
 }
 
-fn setupParsers(alloc: std.mem.Allocator) !void {
-    try common.ensureDir(PARSERS_DIR);
+fn setupParsers(io: std.Io, alloc: std.mem.Allocator) !void {
+    try common.ensureDir(io, PARSERS_DIR);
     const repos = [_]struct { url: []const u8, dir: []const u8 }{
         .{ .url = "https://github.com/lexbor/lexbor.git", .dir = "lexbor" },
         .{ .url = "https://github.com/cloudflare/lol-html.git", .dir = "lol-html" },
@@ -177,7 +177,7 @@ fn setupParsers(alloc: std.mem.Allocator) !void {
     for (repos) |repo| {
         const git_path = try std.fmt.allocPrint(alloc, "{s}/{s}/.git", .{ PARSERS_DIR, repo.dir });
         defer alloc.free(git_path);
-        if (pathExists(git_path)) {
+        if (pathExists(io, git_path)) {
             std.debug.print("already present: {s}\n", .{repo.dir});
             continue;
         }
@@ -185,13 +185,13 @@ fn setupParsers(alloc: std.mem.Allocator) !void {
         const dst = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ PARSERS_DIR, repo.dir });
         defer alloc.free(dst);
         const argv = [_][]const u8{ "git", "clone", "--depth", "1", repo.url, dst };
-        try common.runInherit(alloc, &argv, REPO_ROOT);
+        try common.runInherit(io, alloc, &argv, REPO_ROOT);
     }
     std.debug.print("done\n", .{});
 }
 
-fn setupFixtures(alloc: std.mem.Allocator, refresh: bool) !void {
-    try common.ensureDir(FIXTURES_DIR);
+fn setupFixtures(io: std.Io, alloc: std.mem.Allocator, refresh: bool) !void {
+    try common.ensureDir(io, FIXTURES_DIR);
     const targets = [_]struct { url: []const u8, out: []const u8 }{
         .{ .url = "https://www.rust-lang.org/", .out = "rust-lang.html" },
         .{ .url = "https://en.wikipedia.org/wiki/HTML", .out = "wiki-html.html" },
@@ -211,7 +211,7 @@ fn setupFixtures(alloc: std.mem.Allocator, refresh: bool) !void {
         defer alloc.free(target);
 
         if (!refresh) {
-            const stat = std.fs.cwd().statFile(target) catch null;
+            const stat = std.Io.Dir.cwd().statFile(io, target, .{}) catch null;
             if (stat != null and stat.?.size > 0) {
                 std.debug.print("cached: {s}\n", .{item.out});
                 continue;
@@ -234,17 +234,17 @@ fn setupFixtures(alloc: std.mem.Allocator, refresh: bool) !void {
             "-o",
             target,
         };
-        try common.runInherit(alloc, &argv, REPO_ROOT);
+        try common.runInherit(io, alloc, &argv, REPO_ROOT);
     }
     std.debug.print("fixtures ready in {s}\n", .{FIXTURES_DIR});
 }
 
-fn ensureExternalParsersBuilt(alloc: std.mem.Allocator) !void {
-    if (!pathExists("bench/parsers/lol-html/Cargo.toml")) {
-        try setupParsers(alloc);
+fn ensureExternalParsersBuilt(io: std.Io, alloc: std.mem.Allocator) !void {
+    if (!pathExists(io, "bench/parsers/lol-html/Cargo.toml")) {
+        try setupParsers(io, alloc);
     }
 
-    if (!pathExists("bench/build/lexbor/liblexbor_static.a")) {
+    if (!pathExists(io, "bench/build/lexbor/liblexbor_static.a")) {
         const cmake_cfg = [_][]const u8{
             "cmake",
             "-S",
@@ -255,16 +255,16 @@ fn ensureExternalParsersBuilt(alloc: std.mem.Allocator) !void {
             "-DLEXBOR_BUILD_TESTS=OFF",
             "-DLEXBOR_BUILD_EXAMPLES=OFF",
         };
-        try common.runInherit(alloc, &cmake_cfg, REPO_ROOT);
+        try common.runInherit(io, alloc, &cmake_cfg, REPO_ROOT);
         const cmake_build = [_][]const u8{ "cmake", "--build", "bench/build/lexbor", "-j" };
-        try common.runInherit(alloc, &cmake_build, REPO_ROOT);
+        try common.runInherit(io, alloc, &cmake_build, REPO_ROOT);
     }
 }
 
-fn buildRunners(alloc: std.mem.Allocator) !void {
-    try common.ensureDir(BIN_DIR);
+fn buildRunners(io: std.Io, alloc: std.mem.Allocator) !void {
+    try common.ensureDir(io, BIN_DIR);
     const zig_build = [_][]const u8{ "zig", "build", "-Doptimize=ReleaseFast" };
-    try common.runInherit(alloc, &zig_build, REPO_ROOT);
+    try common.runInherit(io, alloc, &zig_build, REPO_ROOT);
 
     const strlen_cc = [_][]const u8{
         "cc",
@@ -274,7 +274,7 @@ fn buildRunners(alloc: std.mem.Allocator) !void {
         "-o",
         "bench/build/bin/strlen_runner",
     };
-    try common.runInherit(alloc, &strlen_cc, REPO_ROOT);
+    try common.runInherit(io, alloc, &strlen_cc, REPO_ROOT);
 
     const lexbor_cc = [_][]const u8{
         "cc",
@@ -286,7 +286,7 @@ fn buildRunners(alloc: std.mem.Allocator) !void {
         "-o",
         "bench/build/bin/lexbor_runner",
     };
-    try common.runInherit(alloc, &lexbor_cc, REPO_ROOT);
+    try common.runInherit(io, alloc, &lexbor_cc, REPO_ROOT);
 
     const cargo_lol = [_][]const u8{
         "cargo",
@@ -295,7 +295,7 @@ fn buildRunners(alloc: std.mem.Allocator) !void {
         "--manifest-path",
         "bench/runners/lol_html_runner/Cargo.toml",
     };
-    try common.runInherit(alloc, &cargo_lol, REPO_ROOT);
+    try common.runInherit(io, alloc, &cargo_lol, REPO_ROOT);
 }
 
 const ParseResult = struct {
@@ -309,7 +309,6 @@ const ParseResult = struct {
 
 const QueryResult = struct {
     parser: []const u8,
-    mode: []const u8,
     case: []const u8,
     selector: []const u8,
     fixture: ?[]const u8 = null,
@@ -351,7 +350,6 @@ const ReadmeBenchSnapshot = struct {
 const ExternalSuiteCounts = struct {
     total: usize,
     passed: usize,
-    failed: usize,
 };
 
 const ExternalSuiteMode = struct {
@@ -414,10 +412,43 @@ fn freeArgv(alloc: std.mem.Allocator, argv: []const []const u8) void {
     alloc.free(argv);
 }
 
-fn runIntCmd(alloc: std.mem.Allocator, argv: []const []const u8) !u64 {
+fn freeParseSamples(alloc: std.mem.Allocator, results: []const ParseResult) void {
+    for (results) |row| {
+        alloc.free(row.samples_ns);
+    }
+}
+
+fn freeQuerySamples(alloc: std.mem.Allocator, results: []const QueryResult) void {
+    for (results) |row| {
+        alloc.free(row.samples_ns);
+    }
+}
+
+fn deinitOwnedStringList(alloc: std.mem.Allocator, list: *std.ArrayList([]const u8)) void {
+    for (list.items) |item| alloc.free(item);
+    list.deinit(alloc);
+}
+
+fn deinitOwnedStringSet(alloc: std.mem.Allocator, set: *std.StringHashMap(void)) void {
+    var it = set.keyIterator();
+    while (it.next()) |key_ptr| alloc.free(key_ptr.*);
+    set.deinit();
+}
+
+fn appendOwnedString(alloc: std.mem.Allocator, list: *std.ArrayList([]const u8), item: []const u8) !void {
+    errdefer alloc.free(item);
+    try list.append(alloc, item);
+}
+
+fn putOwnedString(alloc: std.mem.Allocator, set: *std.StringHashMap(void), key: []const u8) !void {
+    errdefer alloc.free(key);
+    try set.put(key, {});
+}
+
+fn runIntCmd(io: std.Io, alloc: std.mem.Allocator, argv: []const []const u8) !u64 {
     const taskset_path: ?[]const u8 = blk: {
-        if (common.fileExists("/usr/bin/taskset")) break :blk "/usr/bin/taskset";
-        if (common.fileExists("/bin/taskset")) break :blk "/bin/taskset";
+        if (common.fileExists(io, "/usr/bin/taskset")) break :blk "/usr/bin/taskset";
+        if (common.fileExists(io, "/bin/taskset")) break :blk "/bin/taskset";
         break :blk null;
     };
 
@@ -431,28 +462,28 @@ fn runIntCmd(alloc: std.mem.Allocator, argv: []const []const u8) !u64 {
     } else argv;
     defer if (run_argv.ptr != argv.ptr) alloc.free(run_argv);
 
-    const out = try common.runCaptureCombined(alloc, run_argv, REPO_ROOT);
+    const out = try common.runCaptureCombined(io, alloc, run_argv, REPO_ROOT);
     defer alloc.free(out);
     return common.parseLastInt(out);
 }
 
-fn benchParseOne(alloc: std.mem.Allocator, parser_name: []const u8, fixture_name: []const u8, iterations: usize) !ParseResult {
+fn benchParseOne(io: std.Io, alloc: std.mem.Allocator, parser_name: []const u8, fixture_name: []const u8, iterations: usize) !ParseResult {
     const fixture = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ FIXTURES_DIR, fixture_name });
     defer alloc.free(fixture);
-    const stat = try std.fs.cwd().statFile(fixture);
+    const stat = try std.Io.Dir.cwd().statFile(io, fixture, .{});
     const size_bytes = stat.size;
 
     {
         const warm = try runnerCmdParse(alloc, parser_name, fixture, 1);
         defer freeArgv(alloc, warm);
-        _ = try runIntCmd(alloc, warm);
+        _ = try runIntCmd(io, alloc, warm);
     }
 
     const samples = try alloc.alloc(u64, repeats);
     for (samples) |*slot| {
         const argv = try runnerCmdParse(alloc, parser_name, fixture, iterations);
         defer freeArgv(alloc, argv);
-        slot.* = try runIntCmd(alloc, argv);
+        slot.* = try runIntCmd(io, alloc, argv);
     }
 
     const median_ns = try common.medianU64(alloc, samples);
@@ -469,19 +500,19 @@ fn benchParseOne(alloc: std.mem.Allocator, parser_name: []const u8, fixture_name
     };
 }
 
-fn benchQueryParseOne(alloc: std.mem.Allocator, parser_name: []const u8, case_name: []const u8, selector: []const u8, iterations: usize) !QueryResult {
+fn benchQueryParseOne(io: std.Io, alloc: std.mem.Allocator, parser_name: []const u8, case_name: []const u8, selector: []const u8, iterations: usize) !QueryResult {
     const iter_s = try std.fmt.allocPrint(alloc, "{d}", .{iterations});
     defer alloc.free(iter_s);
 
     {
         const warm = [_][]const u8{ "zig-out/bin/htmlparser-bench", "query-parse", selector, "1" };
-        _ = try runIntCmd(alloc, &warm);
+        _ = try runIntCmd(io, alloc, &warm);
     }
 
     const samples = try alloc.alloc(u64, repeats);
     for (samples) |*slot| {
         const argv = [_][]const u8{ "zig-out/bin/htmlparser-bench", "query-parse", selector, iter_s };
-        slot.* = try runIntCmd(alloc, &argv);
+        slot.* = try runIntCmd(io, alloc, &argv);
     }
 
     const median_ns = try common.medianU64(alloc, samples);
@@ -490,7 +521,6 @@ fn benchQueryParseOne(alloc: std.mem.Allocator, parser_name: []const u8, case_na
     const ns_per_op = @as(f64, @floatFromInt(median_ns)) / @as(f64, @floatFromInt(iterations));
     return .{
         .parser = parser_name,
-        .mode = "runtime",
         .case = case_name,
         .selector = selector,
         .iterations = iterations,
@@ -501,7 +531,7 @@ fn benchQueryParseOne(alloc: std.mem.Allocator, parser_name: []const u8, case_na
     };
 }
 
-fn benchQueryExecOne(alloc: std.mem.Allocator, parser_name: []const u8, mode: []const u8, case_name: []const u8, fixture_name: []const u8, selector: []const u8, iterations: usize, cached: bool) !QueryResult {
+fn benchQueryExecOne(io: std.Io, alloc: std.mem.Allocator, parser_name: []const u8, mode: []const u8, case_name: []const u8, fixture_name: []const u8, selector: []const u8, iterations: usize, cached: bool) !QueryResult {
     const fixture = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ FIXTURES_DIR, fixture_name });
     defer alloc.free(fixture);
     const iter_s = try std.fmt.allocPrint(alloc, "{d}", .{iterations});
@@ -510,13 +540,13 @@ fn benchQueryExecOne(alloc: std.mem.Allocator, parser_name: []const u8, mode: []
 
     {
         const warm = [_][]const u8{ "zig-out/bin/htmlparser-bench", sub, mode, fixture, selector, "1" };
-        _ = try runIntCmd(alloc, &warm);
+        _ = try runIntCmd(io, alloc, &warm);
     }
 
     const samples = try alloc.alloc(u64, repeats);
     for (samples) |*slot| {
         const argv = [_][]const u8{ "zig-out/bin/htmlparser-bench", sub, mode, fixture, selector, iter_s };
-        slot.* = try runIntCmd(alloc, &argv);
+        slot.* = try runIntCmd(io, alloc, &argv);
     }
     const median_ns = try common.medianU64(alloc, samples);
     const seconds = @as(f64, @floatFromInt(median_ns)) / 1_000_000_000.0;
@@ -524,7 +554,6 @@ fn benchQueryExecOne(alloc: std.mem.Allocator, parser_name: []const u8, mode: []
     const ns_per_op = @as(f64, @floatFromInt(median_ns)) / @as(f64, @floatFromInt(iterations));
     return .{
         .parser = parser_name,
-        .mode = mode,
         .case = case_name,
         .selector = selector,
         .fixture = fixture_name,
@@ -568,42 +597,48 @@ fn findReadmeQuery(rows: []const ReadmeQueryResult, parser_name: []const u8, cas
     return null;
 }
 
-fn appendUniqueString(list: *std.ArrayList([]const u8), alloc: std.mem.Allocator, value: []const u8) !void {
-    for (list.items) |it| {
-        if (std.mem.eql(u8, it, value)) return;
-    }
-    try list.append(alloc, value);
-}
-
-fn writeMaybeF64(w: anytype, value: ?f64) !void {
-    if (value) |v| {
-        try w.print("{d:.2}", .{v});
-    } else {
-        try w.writeAll("-");
-    }
-}
-
 fn renderDocumentationBenchmarkSection(alloc: std.mem.Allocator, snap: ReadmeBenchSnapshot) ![]u8 {
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(alloc);
-    const w = out.writer(alloc);
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    errdefer out.deinit();
+    const w = &out.writer;
 
     var fixtures = std.ArrayList([]const u8).empty;
     defer fixtures.deinit(alloc);
     for (snap.parse_results) |row| {
-        try appendUniqueString(&fixtures, alloc, row.fixture);
+        var seen = false;
+        for (fixtures.items) |it| {
+            if (std.mem.eql(u8, it, row.fixture)) {
+                seen = true;
+                break;
+            }
+        }
+        if (!seen) try fixtures.append(alloc, row.fixture);
     }
 
     var query_match_cases = std.ArrayList([]const u8).empty;
     defer query_match_cases.deinit(alloc);
     for (snap.query_match_results) |row| {
-        try appendUniqueString(&query_match_cases, alloc, row.case);
+        var seen = false;
+        for (query_match_cases.items) |it| {
+            if (std.mem.eql(u8, it, row.case)) {
+                seen = true;
+                break;
+            }
+        }
+        if (!seen) try query_match_cases.append(alloc, row.case);
     }
 
     var query_parse_cases = std.ArrayList([]const u8).empty;
     defer query_parse_cases.deinit(alloc);
     for (snap.query_parse_results) |row| {
-        try appendUniqueString(&query_parse_cases, alloc, row.case);
+        var seen = false;
+        for (query_parse_cases.items) |it| {
+            if (std.mem.eql(u8, it, row.case)) {
+                seen = true;
+                break;
+            }
+        }
+        if (!seen) try query_parse_cases.append(alloc, row.case);
     }
 
     try w.print("Source: `bench/results/latest.json` (`{s}` profile).\n\n", .{snap.profile});
@@ -613,11 +648,23 @@ fn renderDocumentationBenchmarkSection(alloc: std.mem.Allocator, snap: ReadmeBen
     try w.writeAll("|---|---:|---:|---:|\n");
     for (fixtures.items) |fixture| {
         try w.print("| `{s}` | ", .{fixture});
-        try writeMaybeF64(w, findReadmeParseThroughput(snap.parse_results, "ours", fixture));
+        if (findReadmeParseThroughput(snap.parse_results, "ours", fixture)) |v| {
+            try w.print("{d:.2}", .{v});
+        } else {
+            try w.writeAll("-");
+        }
         try w.writeAll(" | ");
-        try writeMaybeF64(w, findReadmeParseThroughput(snap.parse_results, "lol-html", fixture));
+        if (findReadmeParseThroughput(snap.parse_results, "lol-html", fixture)) |v| {
+            try w.print("{d:.2}", .{v});
+        } else {
+            try w.writeAll("-");
+        }
         try w.writeAll(" | ");
-        try writeMaybeF64(w, findReadmeParseThroughput(snap.parse_results, "lexbor", fixture));
+        if (findReadmeParseThroughput(snap.parse_results, "lexbor", fixture)) |v| {
+            try w.print("{d:.2}", .{v});
+        } else {
+            try w.writeAll("-");
+        }
         try w.writeAll(" |\n");
     }
 
@@ -627,9 +674,17 @@ fn renderDocumentationBenchmarkSection(alloc: std.mem.Allocator, snap: ReadmeBen
     for (query_match_cases.items) |case_name| {
         const ours = findReadmeQuery(snap.query_match_results, "ours", case_name);
         try w.print("| `{s}` | ", .{case_name});
-        try writeMaybeF64(w, if (ours) |s| s.ops_s else null);
+        if (ours) |s| {
+            try w.print("{d:.2}", .{s.ops_s});
+        } else {
+            try w.writeAll("-");
+        }
         try w.writeAll(" | ");
-        try writeMaybeF64(w, if (ours) |s| s.ns_per_op else null);
+        if (ours) |s| {
+            try w.print("{d:.2}", .{s.ns_per_op});
+        } else {
+            try w.writeAll("-");
+        }
         try w.writeAll(" |\n");
     }
 
@@ -639,9 +694,17 @@ fn renderDocumentationBenchmarkSection(alloc: std.mem.Allocator, snap: ReadmeBen
     for (query_match_cases.items) |case_name| {
         const ours = findReadmeQuery(snap.query_cached_results, "ours", case_name);
         try w.print("| `{s}` | ", .{case_name});
-        try writeMaybeF64(w, if (ours) |s| s.ops_s else null);
+        if (ours) |s| {
+            try w.print("{d:.2}", .{s.ops_s});
+        } else {
+            try w.writeAll("-");
+        }
         try w.writeAll(" | ");
-        try writeMaybeF64(w, if (ours) |s| s.ns_per_op else null);
+        if (ours) |s| {
+            try w.print("{d:.2}", .{s.ns_per_op});
+        } else {
+            try w.writeAll("-");
+        }
         try w.writeAll(" |\n");
     }
 
@@ -651,9 +714,17 @@ fn renderDocumentationBenchmarkSection(alloc: std.mem.Allocator, snap: ReadmeBen
     for (query_parse_cases.items) |case_name| {
         const ours = findReadmeQuery(snap.query_parse_results, "ours", case_name);
         try w.print("| `{s}` | ", .{case_name});
-        try writeMaybeF64(w, if (ours) |r| r.ops_s else null);
+        if (ours) |r| {
+            try w.print("{d:.2}", .{r.ops_s});
+        } else {
+            try w.writeAll("-");
+        }
         try w.writeAll(" | ");
-        try writeMaybeF64(w, if (ours) |r| r.ns_per_op else null);
+        if (ours) |r| {
+            try w.print("{d:.2}", .{r.ns_per_op});
+        } else {
+            try w.writeAll("-");
+        }
         try w.writeAll(" |\n");
     }
 
@@ -661,11 +732,11 @@ fn renderDocumentationBenchmarkSection(alloc: std.mem.Allocator, snap: ReadmeBen
     try w.writeAll("- `bench/results/latest.md`\n");
     try w.writeAll("- `bench/results/latest.json`\n");
 
-    return out.toOwnedSlice(alloc);
+    return out.toOwnedSlice();
 }
 
-fn updateDocumentationBenchmarkSnapshot(alloc: std.mem.Allocator) !void {
-    const latest_json = try common.readFileAlloc(alloc, "bench/results/latest.json");
+fn updateDocumentationBenchmarkSnapshot(io: std.Io, alloc: std.mem.Allocator) !void {
+    const latest_json = try common.readFileAlloc(io, alloc, "bench/results/latest.json");
     defer alloc.free(latest_json);
 
     const parsed = try std.json.parseFromSlice(ReadmeBenchSnapshot, alloc, latest_json, .{
@@ -676,7 +747,7 @@ fn updateDocumentationBenchmarkSnapshot(alloc: std.mem.Allocator) !void {
     const replacement = try renderDocumentationBenchmarkSection(alloc, parsed.value);
     defer alloc.free(replacement);
 
-    const documentation = try common.readFileAlloc(alloc, "DOCUMENTATION.md");
+    const documentation = try common.readFileAlloc(io, alloc, "DOCUMENTATION.md");
     defer alloc.free(documentation);
 
     const start = std.mem.indexOf(u8, documentation, DocumentationBenchmarkStartMarker) orelse return error.ReadmeBenchMarkersMissing;
@@ -697,7 +768,7 @@ fn updateDocumentationBenchmarkSnapshot(alloc: std.mem.Allocator) !void {
     try out.appendSlice(alloc, documentation[end..]);
 
     if (!std.mem.eql(u8, out.items, documentation)) {
-        try common.writeFile("DOCUMENTATION.md", out.items);
+        try common.writeFile(io, "DOCUMENTATION.md", out.items);
         std.debug.print("wrote DOCUMENTATION.md benchmark snapshot\n", .{});
     } else {
         std.debug.print("DOCUMENTATION.md benchmark snapshot already up-to-date\n", .{});
@@ -711,14 +782,6 @@ const ParseAverageRow = struct {
 
 fn cmpParseAverageDesc(_: void, a: ParseAverageRow, b: ParseAverageRow) bool {
     return a.avg_mb_s > b.avg_mb_s;
-}
-
-fn writeSpaces(w: anytype, count: usize) !void {
-    for (0..count) |_| try w.writeAll(" ");
-}
-
-fn writeRepeatGlyph(w: anytype, glyph: []const u8, count: usize) !void {
-    for (0..count) |_| try w.writeAll(glyph);
 }
 
 fn parseAverageRows(alloc: std.mem.Allocator, snap: ReadmeBenchSnapshot) ![]ParseAverageRow {
@@ -745,6 +808,10 @@ fn parseAverageRows(alloc: std.mem.Allocator, snap: ReadmeBenchSnapshot) ![]Pars
     return rows.toOwnedSlice(alloc);
 }
 
+fn failedCount(summary: anytype) usize {
+    return summary.total - summary.passed;
+}
+
 fn writeConformanceRow(
     w: anytype,
     profile: []const u8,
@@ -757,27 +824,27 @@ fn writeConformanceRow(
         profile,
         nw.passed,
         nw.total,
-        nw.failed,
+        failedCount(nw),
         qw.passed,
         qw.total,
-        qw.failed,
+        failedCount(qw),
         html5lib.passed,
         html5lib.total,
-        html5lib.failed,
+        failedCount(html5lib),
         whatwg.passed,
         whatwg.total,
-        whatwg.failed,
+        failedCount(whatwg),
     });
 }
 
 fn parserHtml5libCounts(mode: ExternalSuiteMode) ExternalSuiteCounts {
     if (mode.parser_suites) |s| return s.html5lib_subset;
-    return .{ .total = 0, .passed = 0, .failed = 0 };
+    return .{ .total = 0, .passed = 0 };
 }
 
 fn parserWhatwgCounts(mode: ExternalSuiteMode) ExternalSuiteCounts {
     if (mode.parser_suites) |s| return s.whatwg_html_parsing;
-    return .{ .total = 0, .passed = 0, .failed = 0 };
+    return .{ .total = 0, .passed = 0 };
 }
 
 fn sameExternalMode(a: ExternalSuiteMode, b: ExternalSuiteMode) bool {
@@ -788,26 +855,22 @@ fn sameExternalMode(a: ExternalSuiteMode, b: ExternalSuiteMode) bool {
 
     return a.selector_suites.nwmatcher.total == b.selector_suites.nwmatcher.total and
         a.selector_suites.nwmatcher.passed == b.selector_suites.nwmatcher.passed and
-        a.selector_suites.nwmatcher.failed == b.selector_suites.nwmatcher.failed and
         a.selector_suites.qwery_contextual.total == b.selector_suites.qwery_contextual.total and
         a.selector_suites.qwery_contextual.passed == b.selector_suites.qwery_contextual.passed and
-        a.selector_suites.qwery_contextual.failed == b.selector_suites.qwery_contextual.failed and
         a_html5.total == b_html5.total and
         a_html5.passed == b_html5.passed and
-        a_html5.failed == b_html5.failed and
         a_whatwg.total == b_whatwg.total and
-        a_whatwg.passed == b_whatwg.passed and
-        a_whatwg.failed == b_whatwg.failed;
+        a_whatwg.passed == b_whatwg.passed;
 }
 
-fn renderReadmeAutoSummary(alloc: std.mem.Allocator) ![]u8 {
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(alloc);
-    const w = out.writer(alloc);
+fn renderReadmeAutoSummary(io: std.Io, alloc: std.mem.Allocator) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    errdefer out.deinit();
+    const w = &out.writer;
 
-    const latest_exists = common.fileExists("bench/results/latest.json");
+    const latest_exists = common.fileExists(io, "bench/results/latest.json");
     if (latest_exists) {
-        const latest_json = try common.readFileAlloc(alloc, "bench/results/latest.json");
+        const latest_json = try common.readFileAlloc(io, alloc, "bench/results/latest.json");
         defer alloc.free(latest_json);
         const parsed = try std.json.parseFromSlice(ReadmeBenchSnapshot, alloc, latest_json, .{
             .ignore_unknown_fields = true,
@@ -836,10 +899,16 @@ fn renderReadmeAutoSummary(alloc: std.mem.Allocator) ![]u8 {
             else
                 @as(usize, 0);
             try w.writeAll(r.parser);
-            try writeSpaces(w, max_name_len - r.parser.len);
+            for (0..max_name_len - r.parser.len) |_| {
+                try w.writeByte(' ');
+            }
             try w.writeAll(" │");
-            try writeRepeatGlyph(w, "█", filled);
-            try writeRepeatGlyph(w, "░", width - filled);
+            for (0..filled) |_| {
+                try w.writeAll("█");
+            }
+            for (0..(width - filled)) |_| {
+                try w.writeAll("░");
+            }
             try w.print("│ {d:.2} MB/s ({d:.2}%)\n", .{ r.avg_mb_s, pct });
         }
         try w.writeAll("```\n");
@@ -848,8 +917,8 @@ fn renderReadmeAutoSummary(alloc: std.mem.Allocator) ![]u8 {
     }
 
     try w.writeAll("\n### Conformance Snapshot\n\n");
-    if (common.fileExists("bench/results/external_suite_report.json")) {
-        const ext_json = try common.readFileAlloc(alloc, "bench/results/external_suite_report.json");
+    if (common.fileExists(io, "bench/results/external_suite_report.json")) {
+        const ext_json = try common.readFileAlloc(io, alloc, "bench/results/external_suite_report.json");
         defer alloc.free(ext_json);
         const parsed_ext = try std.json.parseFromSlice(ExternalSuiteReport, alloc, ext_json, .{
             .ignore_unknown_fields = true,
@@ -896,14 +965,14 @@ fn renderReadmeAutoSummary(alloc: std.mem.Allocator) ![]u8 {
         try w.writeAll("Run `zig build conformance` to generate conformance summary.\n");
     }
 
-    return out.toOwnedSlice(alloc);
+    return out.toOwnedSlice();
 }
 
-fn updateReadmeAutoSummary(alloc: std.mem.Allocator) !void {
-    const replacement = try renderReadmeAutoSummary(alloc);
+fn updateReadmeAutoSummary(io: std.Io, alloc: std.mem.Allocator) !void {
+    const replacement = try renderReadmeAutoSummary(io, alloc);
     defer alloc.free(replacement);
 
-    const readme = try common.readFileAlloc(alloc, "README.md");
+    const readme = try common.readFileAlloc(io, alloc, "README.md");
     defer alloc.free(readme);
 
     const start = std.mem.indexOf(u8, readme, ReadmeSummaryStartMarker) orelse return error.ReadmeBenchMarkersMissing;
@@ -924,7 +993,7 @@ fn updateReadmeAutoSummary(alloc: std.mem.Allocator) !void {
     try out.appendSlice(alloc, readme[end..]);
 
     if (!std.mem.eql(u8, out.items, readme)) {
-        try common.writeFile("README.md", out.items);
+        try common.writeFile(io, "README.md", out.items);
         std.debug.print("wrote README.md auto summary\n", .{});
     } else {
         std.debug.print("README.md auto summary already up-to-date\n", .{});
@@ -932,6 +1001,7 @@ fn updateReadmeAutoSummary(alloc: std.mem.Allocator) !void {
 }
 
 fn writeMarkdown(
+    io: std.Io,
     alloc: std.mem.Allocator,
     profile_name: []const u8,
     parse_results: []const ParseResult,
@@ -940,11 +1010,11 @@ fn writeMarkdown(
     query_cached_results: []const QueryResult,
     gate_rows: []const GateRow,
 ) ![]u8 {
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(alloc);
-    const w = out.writer(alloc);
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    errdefer out.deinit();
+    const w = &out.writer;
 
-    try w.print("# HTML Parser Benchmark Results\n\nGenerated (unix): {d}\n\nProfile: `{s}`\n\n", .{ common.nowUnix(), profile_name });
+    try w.print("# HTML Parser Benchmark Results\n\nGenerated (unix): {d}\n\nProfile: `{s}`\n\n", .{ common.nowUnix(io), profile_name });
     try w.writeAll("## Parse Throughput\n\n");
 
     var seen = std.StringHashMap(void).init(alloc);
@@ -993,9 +1063,9 @@ fn writeMarkdown(
         try w.writeAll("\n");
     }
 
-    try writeQuerySection(alloc, &out, "## Query Parse Throughput", query_parse_results);
-    try writeQuerySection(alloc, &out, "## Query Match Throughput", query_match_results);
-    try writeQuerySection(alloc, &out, "## Query Cached Throughput", query_cached_results);
+    try writeQuerySection(alloc, w, "## Query Parse Throughput", query_parse_results);
+    try writeQuerySection(alloc, w, "## Query Match Throughput", query_match_results);
+    try writeQuerySection(alloc, w, "## Query Cached Throughput", query_cached_results);
 
     if (gate_rows.len > 0) {
         try w.writeAll("## Ours vs lol-html Gate\n\n");
@@ -1012,11 +1082,10 @@ fn writeMarkdown(
         try w.writeAll("\n");
     }
 
-    return out.toOwnedSlice(alloc);
+    return out.toOwnedSlice();
 }
 
-fn writeQuerySection(alloc: std.mem.Allocator, out: *std.ArrayList(u8), title: []const u8, rows: []const QueryResult) !void {
-    const w = out.writer(alloc);
+fn writeQuerySection(alloc: std.mem.Allocator, w: *std.Io.Writer, title: []const u8, rows: []const QueryResult) !void {
     try w.print("{s}\n\n", .{title});
     var seen = std.StringHashMap(void).init(alloc);
     defer seen.deinit();
@@ -1077,7 +1146,7 @@ fn fixtureIterations(profile: Profile, fixture: []const u8) usize {
     return 0;
 }
 
-fn rerunFailedGateRows(alloc: std.mem.Allocator, profile: Profile, gate_rows: []GateRow) !void {
+fn rerunFailedGateRows(io: std.Io, alloc: std.mem.Allocator, profile: Profile, gate_rows: []GateRow) !void {
     if (!std.mem.eql(u8, profile.name, "stable")) return;
 
     for (gate_rows) |*row| {
@@ -1089,9 +1158,9 @@ fn rerunFailedGateRows(alloc: std.mem.Allocator, profile: Profile, gate_rows: []
 
         std.debug.print("re-running flaky gate fixture {s} at {d} iters\n", .{ row.fixture, iters });
 
-        const ours = try benchParseOne(alloc, "ours", row.fixture, iters);
+        const ours = try benchParseOne(io, alloc, "ours", row.fixture, iters);
         defer alloc.free(ours.samples_ns);
-        const lol = try benchParseOne(alloc, "lol-html", row.fixture, iters);
+        const lol = try benchParseOne(io, alloc, "lol-html", row.fixture, iters);
         defer alloc.free(lol.samples_ns);
 
         row.ours_mb_s = ours.throughput_mb_s;
@@ -1101,6 +1170,7 @@ fn rerunFailedGateRows(alloc: std.mem.Allocator, profile: Profile, gate_rows: []
 }
 
 fn renderConsole(
+    io: std.Io,
     alloc: std.mem.Allocator,
     profile_name: []const u8,
     parse_results: []const ParseResult,
@@ -1109,12 +1179,12 @@ fn renderConsole(
     query_cached_results: []const QueryResult,
     gate_rows: []const GateRow,
 ) ![]u8 {
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(alloc);
-    const w = out.writer(alloc);
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    errdefer out.deinit();
+    const w = &out.writer;
 
     try w.writeAll("HTML Parser Benchmark Results\n");
-    try w.print("Generated (unix): {d}\n", .{common.nowUnix()});
+    try w.print("Generated (unix): {d}\n", .{common.nowUnix(io)});
     try w.print("Profile: {s}\n\n", .{profile_name});
 
     try w.writeAll("Parse Throughput\n\n");
@@ -1184,9 +1254,9 @@ fn renderConsole(
         try w.writeAll("\n");
     }
 
-    try renderQueryConsoleSection(alloc, &out, "Query Parse Throughput", query_parse_results);
-    try renderQueryConsoleSection(alloc, &out, "Query Match Throughput", query_match_results);
-    try renderQueryConsoleSection(alloc, &out, "Query Cached Throughput", query_cached_results);
+    try renderQueryConsoleSection(alloc, w, "Query Parse Throughput", query_parse_results);
+    try renderQueryConsoleSection(alloc, w, "Query Match Throughput", query_match_results);
+    try renderQueryConsoleSection(alloc, w, "Query Cached Throughput", query_cached_results);
 
     if (gate_rows.len > 0) {
         try w.writeAll("Ours vs lol-html Gate\n\n");
@@ -1217,13 +1287,19 @@ fn renderConsole(
         try w.writeAll("\n");
     }
 
-    return out.toOwnedSlice(alloc);
+    return out.toOwnedSlice();
+}
+
+fn writeByteNTimes(writer: anytype, byte: u8, n: usize) !void {
+    for (0..n) |_| {
+        try writer.writeByte(byte);
+    }
 }
 
 fn appendAsciiSep(writer: anytype, widths: []const usize) !void {
     try writer.writeAll("+-");
     for (widths, 0..) |w, i| {
-        try writer.writeByteNTimes('-', w);
+        try writeByteNTimes(writer, '-', w);
         if (i + 1 == widths.len) {
             try writer.writeAll("-+\n");
         } else {
@@ -1238,11 +1314,11 @@ fn appendAsciiRow(writer: anytype, widths: []const usize, cells: []const []const
         const width = widths[i];
         const pad = if (width > cell.len) width - cell.len else 0;
         if (right_align[i]) {
-            try writer.writeByteNTimes(' ', pad);
+            try writeByteNTimes(writer, ' ', pad);
             try writer.writeAll(cell);
         } else {
             try writer.writeAll(cell);
-            try writer.writeByteNTimes(' ', pad);
+            try writeByteNTimes(writer, ' ', pad);
         }
         if (i + 1 == cells.len) {
             try writer.writeAll(" |\n");
@@ -1252,8 +1328,7 @@ fn appendAsciiRow(writer: anytype, widths: []const usize, cells: []const []const
     }
 }
 
-fn renderQueryConsoleSection(alloc: std.mem.Allocator, out: *std.ArrayList(u8), title: []const u8, rows: []const QueryResult) !void {
-    const w = out.writer(alloc);
+fn renderQueryConsoleSection(alloc: std.mem.Allocator, w: *std.Io.Writer, title: []const u8, rows: []const QueryResult) !void {
     try w.print("{s}\n\n", .{title});
 
     var seen_cases = std.StringHashMap(void).init(alloc);
@@ -1309,7 +1384,7 @@ fn renderQueryConsoleSection(alloc: std.mem.Allocator, out: *std.ArrayList(u8), 
     }
 }
 
-fn runBenchmarks(alloc: std.mem.Allocator, args: []const []const u8) !void {
+fn runBenchmarks(io: std.Io, alloc: std.mem.Allocator, args: []const [:0]const u8) !void {
     var profile_name: []const u8 = "quick";
     var write_baseline = false;
 
@@ -1329,55 +1404,67 @@ fn runBenchmarks(alloc: std.mem.Allocator, args: []const []const u8) !void {
 
     const profile = try getProfile(profile_name);
 
-    try common.ensureDir(BIN_DIR);
-    try common.ensureDir(RESULTS_DIR);
-    try ensureExternalParsersBuilt(alloc);
-    try buildRunners(alloc);
+    try common.ensureDir(io, BIN_DIR);
+    try common.ensureDir(io, RESULTS_DIR);
+    try ensureExternalParsersBuilt(io, alloc);
+    try buildRunners(io, alloc);
 
     var parse_results = std.ArrayList(ParseResult).empty;
-    defer parse_results.deinit(alloc);
+    defer {
+        freeParseSamples(alloc, parse_results.items);
+        parse_results.deinit(alloc);
+    }
 
     for (profile.fixtures) |fixture| {
         for (parse_parsers) |parser_name| {
             std.debug.print("benchmarking {s} on {s} ({d} iters)\n", .{ parser_name, fixture.name, fixture.iterations });
-            const row = try benchParseOne(alloc, parser_name, fixture.name, fixture.iterations);
+            const row = try benchParseOne(io, alloc, parser_name, fixture.name, fixture.iterations);
             try parse_results.append(alloc, row);
         }
     }
 
     var query_parse_results = std.ArrayList(QueryResult).empty;
-    defer query_parse_results.deinit(alloc);
+    defer {
+        freeQuerySamples(alloc, query_parse_results.items);
+        query_parse_results.deinit(alloc);
+    }
     for (query_parse_modes) |qm| {
         for (profile.query_parse_cases) |qc| {
             std.debug.print("benchmarking query-parse {s} on {s} ({d} iters)\n", .{ qm.parser, qc.name, qc.iterations });
-            const row = try benchQueryParseOne(alloc, qm.parser, qc.name, qc.selector, qc.iterations);
+            const row = try benchQueryParseOne(io, alloc, qm.parser, qc.name, qc.selector, qc.iterations);
             try query_parse_results.append(alloc, row);
         }
     }
 
     var query_match_results = std.ArrayList(QueryResult).empty;
-    defer query_match_results.deinit(alloc);
+    defer {
+        freeQuerySamples(alloc, query_match_results.items);
+        query_match_results.deinit(alloc);
+    }
     for (query_modes) |qm| {
         for (profile.query_match_cases) |qc| {
             std.debug.print("benchmarking query-match {s} on {s} ({d} iters)\n", .{ qm.parser, qc.name, qc.iterations });
-            const row = try benchQueryExecOne(alloc, qm.parser, qm.mode, qc.name, qc.fixture, qc.selector, qc.iterations, false);
+            const row = try benchQueryExecOne(io, alloc, qm.parser, qm.mode, qc.name, qc.fixture, qc.selector, qc.iterations, false);
             try query_match_results.append(alloc, row);
         }
     }
 
     var query_cached_results = std.ArrayList(QueryResult).empty;
-    defer query_cached_results.deinit(alloc);
+    defer {
+        freeQuerySamples(alloc, query_cached_results.items);
+        query_cached_results.deinit(alloc);
+    }
     for (query_modes) |qm| {
         for (profile.query_cached_cases) |qc| {
             std.debug.print("benchmarking query-cached {s} on {s} ({d} iters)\n", .{ qm.parser, qc.name, qc.iterations });
-            const row = try benchQueryExecOne(alloc, qm.parser, qm.mode, qc.name, qc.fixture, qc.selector, qc.iterations, true);
+            const row = try benchQueryExecOne(io, alloc, qm.parser, qm.mode, qc.name, qc.fixture, qc.selector, qc.iterations, true);
             try query_cached_results.append(alloc, row);
         }
     }
 
     const gate_rows = try evaluateGateRows(alloc, profile, parse_results.items);
     defer alloc.free(gate_rows);
-    try rerunFailedGateRows(alloc, profile, gate_rows);
+    try rerunFailedGateRows(io, alloc, profile, gate_rows);
 
     const json_out = struct {
         generated_unix: i64,
@@ -1391,7 +1478,7 @@ fn runBenchmarks(alloc: std.mem.Allocator, args: []const []const u8) !void {
         query_cached_results: []const QueryResult,
         gate_summary: []const GateRow,
     }{
-        .generated_unix = common.nowUnix(),
+        .generated_unix = common.nowUnix(io),
         .profile = profile.name,
         .repeats = repeats,
         .bench_modes = .{ .parse = &[_][]const u8{"ours"}, .query = &[_][]const u8{"ours"} },
@@ -1403,32 +1490,32 @@ fn runBenchmarks(alloc: std.mem.Allocator, args: []const []const u8) !void {
         .gate_summary = gate_rows,
     };
 
-    var json_writer: std.io.Writer.Allocating = .init(alloc);
+    var json_writer: std.Io.Writer.Allocating = .init(alloc);
     defer json_writer.deinit();
     var json_stream: std.json.Stringify = .{
         .writer = &json_writer.writer,
         .options = .{ .whitespace = .indent_2 },
     };
     try json_stream.write(json_out);
-    try common.writeFile("bench/results/latest.json", json_writer.written());
+    try common.writeFile(io, "bench/results/latest.json", json_writer.written());
 
-    const md = try writeMarkdown(alloc, profile.name, parse_results.items, query_parse_results.items, query_match_results.items, query_cached_results.items, gate_rows);
+    const md = try writeMarkdown(io, alloc, profile.name, parse_results.items, query_parse_results.items, query_match_results.items, query_cached_results.items, gate_rows);
     defer alloc.free(md);
-    try common.writeFile("bench/results/latest.md", md);
-    try updateDocumentationBenchmarkSnapshot(alloc);
-    try updateReadmeAutoSummary(alloc);
+    try common.writeFile(io, "bench/results/latest.md", md);
+    try updateDocumentationBenchmarkSnapshot(io, alloc);
+    try updateReadmeAutoSummary(io, alloc);
 
     // Optional baseline behavior.
     const baseline_default = try std.fmt.allocPrint(alloc, "bench/results/baseline_{s}.json", .{profile.name});
     defer alloc.free(baseline_default);
 
     if (write_baseline) {
-        try common.writeFile(baseline_default, json_writer.written());
+        try common.writeFile(io, baseline_default, json_writer.written());
         std.debug.print("wrote baseline {s}\n", .{baseline_default});
     }
 
     var failures = std.ArrayList([]const u8).empty;
-    defer failures.deinit(alloc);
+    defer deinitOwnedStringList(alloc, &failures);
 
     for (gate_rows) |g| {
         if (std.mem.eql(u8, profile.name, "stable") and !g.pass) {
@@ -1439,7 +1526,7 @@ fn runBenchmarks(alloc: std.mem.Allocator, args: []const []const u8) !void {
 
     std.debug.print("wrote bench/results/latest.json\n", .{});
     std.debug.print("wrote bench/results/latest.md\n\n", .{});
-    const console = try renderConsole(alloc, profile.name, parse_results.items, query_parse_results.items, query_match_results.items, query_cached_results.items, gate_rows);
+    const console = try renderConsole(io, alloc, profile.name, parse_results.items, query_parse_results.items, query_match_results.items, query_cached_results.items, gate_rows);
     defer alloc.free(console);
     std.debug.print("{s}\n", .{console});
     if (failures.items.len > 0) {
@@ -1465,14 +1552,12 @@ const QwCase = struct {
 const SelectorSuiteSummary = struct {
     total: usize,
     passed: usize,
-    failed: usize,
     examples: []const []const u8,
 };
 
 const ParserSuiteSummary = struct {
     total: usize,
     passed: usize,
-    failed: usize,
     examples: []const []const u8,
 };
 
@@ -1522,9 +1607,9 @@ const ModeFailuresOut = struct {
     },
 };
 
-fn ensureSuites(alloc: std.mem.Allocator) !void {
-    try common.ensureDir(SUITES_CACHE_DIR);
-    try common.ensureDir(SUITES_DIR);
+fn ensureSuites(io: std.Io, alloc: std.mem.Allocator) !void {
+    try common.ensureDir(io, SUITES_CACHE_DIR);
+    try common.ensureDir(io, SUITES_DIR);
 
     const repos = [_]struct { name: []const u8, url: []const u8 }{
         .{ .name = "html5lib-tests", .url = "https://github.com/html5lib/html5lib-tests.git" },
@@ -1536,25 +1621,25 @@ fn ensureSuites(alloc: std.mem.Allocator) !void {
     for (repos) |repo| {
         const cache_path = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ SUITES_CACHE_DIR, repo.name });
         defer alloc.free(cache_path);
-        if (!pathExists(cache_path)) {
+        if (!pathExists(io, cache_path)) {
             const clone_argv = [_][]const u8{ "git", "clone", "--depth", "1", repo.url, cache_path };
-            try common.runInherit(alloc, &clone_argv, REPO_ROOT);
+            try common.runInherit(io, alloc, &clone_argv, REPO_ROOT);
         } else {
             const pull_argv = [_][]const u8{ "git", "-C", cache_path, "pull", "--ff-only" };
-            common.runInherit(alloc, &pull_argv, REPO_ROOT) catch {};
+            common.runInherit(io, alloc, &pull_argv, REPO_ROOT) catch {};
         }
 
         const dst = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ SUITES_DIR, repo.name });
         defer alloc.free(dst);
-        if (!pathExists(dst)) {
+        if (!pathExists(io, dst)) {
             const work_clone_argv = [_][]const u8{ "git", "clone", "--depth", "1", cache_path, dst };
-            try common.runInherit(alloc, &work_clone_argv, REPO_ROOT);
+            try common.runInherit(io, alloc, &work_clone_argv, REPO_ROOT);
         }
     }
 }
 
-fn buildSuiteRunner(alloc: std.mem.Allocator) !void {
-    try common.ensureDir(BIN_DIR);
+fn buildSuiteRunner(io: std.Io, alloc: std.mem.Allocator) !void {
+    try common.ensureDir(io, BIN_DIR);
     const root_mod = "-Mroot=tools/suite_runner.zig";
     const html_mod = "-Mhtmlparser=src/root.zig";
     const argv = [_][]const u8{
@@ -1568,39 +1653,41 @@ fn buildSuiteRunner(alloc: std.mem.Allocator) !void {
         "ReleaseFast",
         "-femit-bin=" ++ SUITE_RUNNER_BIN,
     };
-    try common.runInherit(alloc, &argv, REPO_ROOT);
+    try common.runInherit(io, alloc, &argv, REPO_ROOT);
 }
 
-fn runSelectorCount(alloc: std.mem.Allocator, mode: []const u8, fixture: []const u8, selector: []const u8) !usize {
+fn runSelectorCount(io: std.Io, alloc: std.mem.Allocator, mode: []const u8, fixture: []const u8, selector: []const u8) !usize {
     const argv = [_][]const u8{ SUITE_RUNNER_BIN, "selector-count", mode, fixture, selector };
-    const out = try common.runCaptureStdout(alloc, &argv, REPO_ROOT);
+    const out = try common.runCaptureStdout(io, alloc, &argv, REPO_ROOT);
     defer alloc.free(out);
     return std.fmt.parseInt(usize, out, 10);
 }
 
-fn runSelectorCountScoped(alloc: std.mem.Allocator, mode: []const u8, fixture: []const u8, scope_tag: []const u8, selector: []const u8) !usize {
+fn runSelectorCountScoped(io: std.Io, alloc: std.mem.Allocator, mode: []const u8, fixture: []const u8, scope_tag: []const u8, selector: []const u8) !usize {
     const argv = [_][]const u8{ SUITE_RUNNER_BIN, "selector-count-scope-tag", mode, fixture, scope_tag, selector };
-    const out = try common.runCaptureStdout(alloc, &argv, REPO_ROOT);
+    const out = try common.runCaptureStdout(io, alloc, &argv, REPO_ROOT);
     defer alloc.free(out);
     return std.fmt.parseInt(usize, out, 10);
 }
 
-fn runParseTagsFile(alloc: std.mem.Allocator, mode: []const u8, fixture: []const u8) ![]const u8 {
+fn runParseTagsFile(io: std.Io, alloc: std.mem.Allocator, mode: []const u8, fixture: []const u8) ![]const u8 {
     const argv = [_][]const u8{ SUITE_RUNNER_BIN, "parse-tags-file", mode, fixture };
-    return common.runCaptureStdout(alloc, &argv, REPO_ROOT);
+    return common.runCaptureStdout(io, alloc, &argv, REPO_ROOT);
 }
 
-fn tempHtmlFile(alloc: std.mem.Allocator, html: []const u8) ![]u8 {
-    const r = std.crypto.random.int(u64);
+fn tempHtmlFile(io: std.Io, alloc: std.mem.Allocator, html: []const u8) ![]u8 {
+    var src: std.Random.IoSource = .{ .io = io };
+    const rng = src.interface();
+    const r = rng.int(u64);
     const path = try std.fmt.allocPrint(alloc, "/tmp/htmlparser-suite-{x}.html", .{r});
-    const f = try std.fs.createFileAbsolute(path, .{ .truncate = true });
-    defer f.close();
-    try f.writeAll(html);
+    const f = try std.Io.Dir.createFileAbsolute(io, path, .{ .truncate = true });
+    defer f.close(io);
+    try f.writeStreamingAll(io, html);
     return path;
 }
 
-fn loadNwCases(alloc: std.mem.Allocator) ![]NwCase {
-    const bytes = try common.readFileAlloc(alloc, CONFORMANCE_CASES_DIR ++ "/nwmatcher_cases.json");
+fn loadNwCases(io: std.Io, alloc: std.mem.Allocator) ![]NwCase {
+    const bytes = try common.readFileAlloc(io, alloc, CONFORMANCE_CASES_DIR ++ "/nwmatcher_cases.json");
     defer alloc.free(bytes);
     const parsed = try std.json.parseFromSlice([]NwCase, alloc, bytes, .{});
     defer parsed.deinit();
@@ -1614,8 +1701,8 @@ fn loadNwCases(alloc: std.mem.Allocator) ![]NwCase {
     return out;
 }
 
-fn loadQwCases(alloc: std.mem.Allocator) ![]QwCase {
-    const bytes = try common.readFileAlloc(alloc, CONFORMANCE_CASES_DIR ++ "/qwery_cases.json");
+fn loadQwCases(io: std.Io, alloc: std.mem.Allocator) ![]QwCase {
+    const bytes = try common.readFileAlloc(io, alloc, CONFORMANCE_CASES_DIR ++ "/qwery_cases.json");
     defer alloc.free(bytes);
     const parsed = try std.json.parseFromSlice([]QwCase, alloc, bytes, .{});
     defer parsed.deinit();
@@ -1639,19 +1726,20 @@ fn dupeStringSlices(alloc: std.mem.Allocator, src: []const []const u8) ![]const 
     return out;
 }
 
-fn htmlPreview(alloc: std.mem.Allocator, html: []const u8) ![]const u8 {
+fn htmlPreview(io: std.Io, alloc: std.mem.Allocator, html: []const u8) ![]const u8 {
+    _ = io;
     const max_preview: usize = 220;
     const clipped = html[0..@min(html.len, max_preview)];
     return std.mem.replaceOwned(u8, alloc, clipped, "\n", "\\n");
 }
 
-fn runSelectorSuites(alloc: std.mem.Allocator, mode: []const u8) !SelectorSuitesResult {
-    const nw_cases = try loadNwCases(alloc);
+fn runSelectorSuites(io: std.Io, alloc: std.mem.Allocator, mode: []const u8) !SelectorSuitesResult {
+    const nw_cases = try loadNwCases(io, alloc);
     defer {
         for (nw_cases) |c| alloc.free(c.selector);
         alloc.free(nw_cases);
     }
-    const qw_cases = try loadQwCases(alloc);
+    const qw_cases = try loadQwCases(io, alloc);
     defer {
         for (qw_cases) |c| {
             alloc.free(c.selector);
@@ -1662,9 +1750,9 @@ fn runSelectorSuites(alloc: std.mem.Allocator, mode: []const u8) !SelectorSuites
 
     const nw_fixture = SUITES_DIR ++ "/css-select/test/fixtures/nwmatcher.html";
     const qw_fixture = SUITES_DIR ++ "/css-select/test/fixtures/qwery.html";
-    const qw_doc_html = try common.readFileAlloc(alloc, CONFORMANCE_CASES_DIR ++ "/qwery_doc.html");
+    const qw_doc_html = try common.readFileAlloc(io, alloc, CONFORMANCE_CASES_DIR ++ "/qwery_doc.html");
     defer alloc.free(qw_doc_html);
-    const qw_frag_html = try common.readFileAlloc(alloc, CONFORMANCE_CASES_DIR ++ "/qwery_frag.html");
+    const qw_frag_html = try common.readFileAlloc(io, alloc, CONFORMANCE_CASES_DIR ++ "/qwery_frag.html");
     defer alloc.free(qw_frag_html);
 
     var nw_passed: usize = 0;
@@ -1674,7 +1762,7 @@ fn runSelectorSuites(alloc: std.mem.Allocator, mode: []const u8) !SelectorSuites
     defer nw_failures.deinit(alloc);
     for (nw_cases, 0..) |c, idx| {
         if (idx >= 140) break;
-        const got = runSelectorCount(alloc, mode, nw_fixture, c.selector) catch {
+        const got = runSelectorCount(io, alloc, mode, nw_fixture, c.selector) catch {
             const msg = try std.fmt.allocPrint(alloc, "{s} expected {d} got <parse-error>", .{ c.selector, c.expected });
             if (nw_examples.items.len < 8) try nw_examples.append(alloc, msg);
             try nw_failures.append(alloc, .{
@@ -1713,7 +1801,7 @@ fn runSelectorSuites(alloc: std.mem.Allocator, mode: []const u8) !SelectorSuites
     for (qw_cases, 0..) |c, idx| {
         const got = blk: {
             if (std.mem.eql(u8, c.context, "document")) {
-                break :blk runSelectorCount(alloc, mode, qw_fixture, c.selector) catch {
+                break :blk runSelectorCount(io, alloc, mode, qw_fixture, c.selector) catch {
                     if (qw_examples.items.len < 8) {
                         const msg = try std.fmt.allocPrint(alloc, "{s} {s} expected {d} got <parse-error>", .{ c.context, c.selector, c.expected });
                         try qw_examples.append(alloc, msg);
@@ -1730,12 +1818,12 @@ fn runSelectorSuites(alloc: std.mem.Allocator, mode: []const u8) !SelectorSuites
                 };
             }
             const html = if (std.mem.eql(u8, c.context, "doc")) qw_doc_html else qw_frag_html;
-            const tmp = try tempHtmlFile(alloc, html);
+            const tmp = try tempHtmlFile(io, alloc, html);
             defer {
-                std.fs.deleteFileAbsolute(tmp) catch {};
+                std.Io.Dir.deleteFileAbsolute(io, tmp) catch {};
                 alloc.free(tmp);
             }
-            break :blk runSelectorCountScoped(alloc, mode, tmp, "root", c.selector) catch {
+            break :blk runSelectorCountScoped(io, alloc, mode, tmp, "root", c.selector) catch {
                 if (qw_examples.items.len < 8) {
                     const msg = try std.fmt.allocPrint(alloc, "{s} {s} expected {d} got <parse-error>", .{ c.context, c.selector, c.expected });
                     try qw_examples.append(alloc, msg);
@@ -1774,13 +1862,11 @@ fn runSelectorSuites(alloc: std.mem.Allocator, mode: []const u8) !SelectorSuites
         .nw = .{
             .total = @min(nw_cases.len, 140),
             .passed = nw_passed,
-            .failed = @min(nw_cases.len, 140) - nw_passed,
             .examples = try nw_examples.toOwnedSlice(alloc),
         },
         .qw = .{
             .total = qw_cases.len,
             .passed = qw_passed,
-            .failed = qw_cases.len - qw_passed,
             .examples = try qw_examples.toOwnedSlice(alloc),
         },
         .nw_failures = try nw_failures.toOwnedSlice(alloc),
@@ -1813,9 +1899,41 @@ const ParserCase = struct {
     expected: []const []const u8,
 };
 
-fn parseHtml5libDat(alloc: std.mem.Allocator, path: []const u8, out: *std.ArrayList(ParserCase)) !void {
-    const text = try common.readFileAlloc(alloc, path);
+fn freeOwnedStringSlice(alloc: std.mem.Allocator, items: []const []const u8) void {
+    for (items) |item| alloc.free(item);
+    alloc.free(items);
+}
+
+fn freeParserCase(alloc: std.mem.Allocator, c: ParserCase) void {
+    alloc.free(c.html);
+    freeOwnedStringSlice(alloc, c.expected);
+}
+
+fn freeParserCases(alloc: std.mem.Allocator, cases: []const ParserCase) void {
+    for (cases) |c| freeParserCase(alloc, c);
+    alloc.free(cases);
+}
+
+fn deinitParserCaseList(alloc: std.mem.Allocator, list: *std.ArrayList(ParserCase)) void {
+    for (list.items) |c| freeParserCase(alloc, c);
+    list.deinit(alloc);
+}
+
+fn transferOwnedParserCases(alloc: std.mem.Allocator, dst: *std.ArrayList(ParserCase), cases: []ParserCase) !void {
+    errdefer freeParserCases(alloc, cases);
+    try dst.appendSlice(alloc, cases);
+    alloc.free(cases);
+}
+
+fn parseHtml5libDat(io: std.Io, alloc: std.mem.Allocator, path: []const u8) ![]ParserCase {
+    const text = try common.readFileAlloc(io, alloc, path);
     defer alloc.free(text);
+    return parseHtml5libDatText(alloc, text);
+}
+
+fn parseHtml5libDatText(alloc: std.mem.Allocator, text: []const u8) ![]ParserCase {
+    var out = std.ArrayList(ParserCase).empty;
+    errdefer deinitParserCaseList(alloc, &out);
     var blocks = std.mem.splitSequence(u8, text, "\n#data\n");
     while (blocks.next()) |raw_blk| {
         var blk = raw_blk;
@@ -1831,9 +1949,10 @@ fn parseHtml5libDat(alloc: std.mem.Allocator, path: []const u8, out: *std.ArrayL
             html_in = html_in[0..err_idx];
         }
         const html_copy = try alloc.dupe(u8, html_in);
+        errdefer alloc.free(html_copy);
 
         var expected = std.ArrayList([]const u8).empty;
-        errdefer expected.deinit(alloc);
+        errdefer deinitOwnedStringList(alloc, &expected);
         var lines = std.mem.splitScalar(u8, rest, '\n');
         while (lines.next()) |line| {
             if (line.len < 3 or line[0] != '|') continue;
@@ -1849,13 +1968,16 @@ fn parseHtml5libDat(alloc: std.mem.Allocator, path: []const u8, out: *std.ArrayL
                 alloc.free(lower);
                 continue;
             }
-            try expected.append(alloc, lower);
+            try appendOwnedString(alloc, &expected, lower);
         }
+        const expected_slice = try expected.toOwnedSlice(alloc);
+        errdefer freeOwnedStringSlice(alloc, expected_slice);
         try out.append(alloc, .{
             .html = html_copy,
-            .expected = try expected.toOwnedSlice(alloc),
+            .expected = expected_slice,
         });
     }
+    return out.toOwnedSlice(alloc);
 }
 
 fn fromHex(c: u8) !u8 {
@@ -1896,7 +2018,7 @@ fn quoteEnd(text: []const u8, start: usize) ?usize {
 
 fn parseWptTreeExpected(alloc: std.mem.Allocator, decoded_tree: []const u8) ![]const []const u8 {
     var expected = std.ArrayList([]const u8).empty;
-    errdefer expected.deinit(alloc);
+    errdefer deinitOwnedStringList(alloc, &expected);
 
     var lines = std.mem.splitScalar(u8, decoded_tree, '\n');
     while (lines.next()) |line| {
@@ -1913,17 +2035,23 @@ fn parseWptTreeExpected(alloc: std.mem.Allocator, decoded_tree: []const u8) ![]c
             alloc.free(lower);
             continue;
         }
-        try expected.append(alloc, lower);
+        try appendOwnedString(alloc, &expected, lower);
     }
     return expected.toOwnedSlice(alloc);
 }
 
-fn parseWptHtmlSuiteFile(alloc: std.mem.Allocator, path: []const u8, out: *std.ArrayList(ParserCase)) !void {
-    const text = try common.readFileAlloc(alloc, path);
+fn parseWptHtmlSuiteFile(io: std.Io, alloc: std.mem.Allocator, path: []const u8) ![]ParserCase {
+    const text = try common.readFileAlloc(io, alloc, path);
     defer alloc.free(text);
+    return parseWptHtmlSuiteText(alloc, text);
+}
 
-    if (std.mem.indexOf(u8, text, "var tests = {") == null) return;
-    if (std.mem.indexOf(u8, text, "init_tests(") == null) return;
+fn parseWptHtmlSuiteText(alloc: std.mem.Allocator, text: []const u8) ![]ParserCase {
+    if (std.mem.indexOf(u8, text, "var tests = {") == null) return try alloc.alloc(ParserCase, 0);
+    if (std.mem.indexOf(u8, text, "init_tests(") == null) return try alloc.alloc(ParserCase, 0);
+
+    var out = std.ArrayList(ParserCase).empty;
+    errdefer deinitParserCaseList(alloc, &out);
 
     var pos: usize = 0;
     while (std.mem.indexOfPos(u8, text, pos, "[async_test(")) |mark| {
@@ -1939,7 +2067,7 @@ fn parseWptHtmlSuiteFile(alloc: std.mem.Allocator, path: []const u8, out: *std.A
         // [async_test(...), "<html>", "<tree>", "<context>"]
         // This parser harness only validates full-document cases, so skip any
         // entry that carries additional args after expected tree string.
-        const tail = std.mem.trimLeft(u8, text[expected_end + 1 ..], " \t\r\n");
+        const tail = std.mem.trimStart(u8, text[expected_end + 1 ..], " \t\r\n");
         if (tail.len == 0) break;
         if (tail[0] == ',') continue;
         if (tail[0] != ']') continue;
@@ -1963,6 +2091,7 @@ fn parseWptHtmlSuiteFile(alloc: std.mem.Allocator, path: []const u8, out: *std.A
             .expected = expected,
         });
     }
+    return out.toOwnedSlice(alloc);
 }
 
 fn parseTagJsonArray(alloc: std.mem.Allocator, text: []const u8) ![]const []const u8 {
@@ -1970,7 +2099,7 @@ fn parseTagJsonArray(alloc: std.mem.Allocator, text: []const u8) ![]const []cons
     defer parsed.deinit();
     if (parsed.value != .array) return error.InvalidJson;
     var tags = std.ArrayList([]const u8).empty;
-    errdefer tags.deinit(alloc);
+    errdefer deinitOwnedStringList(alloc, &tags);
     for (parsed.value.array.items) |it| {
         if (it != .string) continue;
         const lower = try std.ascii.allocLowerString(alloc, it.string);
@@ -1978,7 +2107,7 @@ fn parseTagJsonArray(alloc: std.mem.Allocator, text: []const u8) ![]const []cons
             alloc.free(lower);
             continue;
         }
-        try tags.append(alloc, lower);
+        try appendOwnedString(alloc, &tags, lower);
     }
     return tags.toOwnedSlice(alloc);
 }
@@ -1991,7 +2120,7 @@ fn eqlStringSlices(a: []const []const u8, b: []const []const u8) bool {
     return true;
 }
 
-fn runParserCases(alloc: std.mem.Allocator, mode: []const u8, cases: []const ParserCase, max_cases: usize) !ParserSuiteResult {
+fn runParserCases(io: std.Io, alloc: std.mem.Allocator, mode: []const u8, cases: []const ParserCase, max_cases: usize) !ParserSuiteResult {
     const limit = @min(max_cases, cases.len);
     var passed: usize = 0;
     var examples = std.ArrayList([]const u8).empty;
@@ -2001,12 +2130,12 @@ fn runParserCases(alloc: std.mem.Allocator, mode: []const u8, cases: []const Par
     var idx: usize = 0;
     while (idx < limit) : (idx += 1) {
         const c = cases[idx];
-        const tmp = try tempHtmlFile(alloc, c.html);
+        const tmp = try tempHtmlFile(io, alloc, c.html);
         defer {
-            std.fs.deleteFileAbsolute(tmp) catch {};
+            std.Io.Dir.deleteFileAbsolute(io, tmp) catch {};
             alloc.free(tmp);
         }
-        const raw = runParseTagsFile(alloc, mode, tmp) catch {
+        const raw = runParseTagsFile(io, alloc, mode, tmp) catch {
             if (examples.items.len < 10) {
                 const src = std.mem.replaceOwned(u8, alloc, c.html, "\n", "\\n") catch c.html;
                 const msg = std.fmt.allocPrint(alloc, "{s} -> <parse-error>", .{src}) catch "parse-error";
@@ -2015,7 +2144,7 @@ fn runParserCases(alloc: std.mem.Allocator, mode: []const u8, cases: []const Par
             const empty: []const []const u8 = &.{};
             try failures.append(alloc, .{
                 .case_index = idx,
-                .input_preview = try htmlPreview(alloc, c.html),
+                .input_preview = try htmlPreview(io, alloc, c.html),
                 .input_len = c.html.len,
                 .expected = try dupeStringSlices(alloc, c.expected),
                 .actual = empty,
@@ -2041,7 +2170,7 @@ fn runParserCases(alloc: std.mem.Allocator, mode: []const u8, cases: []const Par
             }
             try failures.append(alloc, .{
                 .case_index = idx,
-                .input_preview = try htmlPreview(alloc, c.html),
+                .input_preview = try htmlPreview(io, alloc, c.html),
                 .input_len = c.html.len,
                 .expected = try dupeStringSlices(alloc, c.expected),
                 .actual = try dupeStringSlices(alloc, got),
@@ -2054,25 +2183,25 @@ fn runParserCases(alloc: std.mem.Allocator, mode: []const u8, cases: []const Par
         .summary = .{
             .total = limit,
             .passed = passed,
-            .failed = limit - passed,
             .examples = try examples.toOwnedSlice(alloc),
         },
         .failures = try failures.toOwnedSlice(alloc),
     };
 }
 
-fn runHtml5libParserSuite(alloc: std.mem.Allocator, mode: []const u8, max_cases: usize) !ParserSuiteResult {
+fn runHtml5libParserSuite(io: std.Io, alloc: std.mem.Allocator, mode: []const u8, max_cases: usize) !ParserSuiteResult {
     const tc_dir = SUITES_DIR ++ "/html5lib-tests/tree-construction";
-    var dir = try std.fs.cwd().openDir(tc_dir, .{ .iterate = true });
-    defer dir.close();
+    var dir = try std.Io.Dir.cwd().openDir(io, tc_dir, .{ .iterate = true });
+    defer dir.close(io);
 
     var dat_names = std.ArrayList([]const u8).empty;
-    defer dat_names.deinit(alloc);
+    defer deinitOwnedStringList(alloc, &dat_names);
     var it = dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(io)) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.endsWith(u8, entry.name, ".dat")) continue;
-        try dat_names.append(alloc, try alloc.dupe(u8, entry.name));
+        const name = try alloc.dupe(u8, entry.name);
+        try appendOwnedString(alloc, &dat_names, name);
     }
     std.mem.sort([]const u8, dat_names.items, {}, struct {
         fn lt(_: void, a: []const u8, b: []const u8) bool {
@@ -2081,38 +2210,33 @@ fn runHtml5libParserSuite(alloc: std.mem.Allocator, mode: []const u8, max_cases:
     }.lt);
 
     var cases = std.ArrayList(ParserCase).empty;
-    defer {
-        for (cases.items) |c| {
-            alloc.free(c.html);
-            for (c.expected) |tag| alloc.free(tag);
-            alloc.free(c.expected);
-        }
-        cases.deinit(alloc);
-    }
+    defer deinitParserCaseList(alloc, &cases);
     for (dat_names.items) |name| {
         const path = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ tc_dir, name });
         defer alloc.free(path);
-        try parseHtml5libDat(alloc, path, &cases);
+        const parsed_cases = try parseHtml5libDat(io, alloc, path);
+        try transferOwnedParserCases(alloc, &cases, parsed_cases);
     }
 
-    return runParserCases(alloc, mode, cases.items, max_cases);
+    return runParserCases(io, alloc, mode, cases.items, max_cases);
 }
 
-fn runWptParserSuite(alloc: std.mem.Allocator, mode: []const u8, max_cases: usize) !ParserSuiteResult {
+fn runWptParserSuite(io: std.Io, alloc: std.mem.Allocator, mode: []const u8, max_cases: usize) !ParserSuiteResult {
     const wpt_dir = SUITES_DIR ++ "/wpt/html/syntax/parsing";
-    var dir = try std.fs.cwd().openDir(wpt_dir, .{ .iterate = true });
-    defer dir.close();
+    var dir = try std.Io.Dir.cwd().openDir(io, wpt_dir, .{ .iterate = true });
+    defer dir.close(io);
 
     var html_names = std.ArrayList([]const u8).empty;
-    defer html_names.deinit(alloc);
+    defer deinitOwnedStringList(alloc, &html_names);
     var walker = try dir.walk(alloc);
     defer walker.deinit();
-    while (try walker.next()) |entry| {
+    while (try walker.next(io)) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.endsWith(u8, entry.path, ".html")) continue;
         const base = std.fs.path.basename(entry.path);
         if (!std.mem.startsWith(u8, base, "html5lib_")) continue;
-        try html_names.append(alloc, try alloc.dupe(u8, entry.path));
+        const path_copy = try alloc.dupe(u8, entry.path);
+        try appendOwnedString(alloc, &html_names, path_copy);
     }
     std.mem.sort([]const u8, html_names.items, {}, struct {
         fn lt(_: void, a: []const u8, b: []const u8) bool {
@@ -2121,19 +2245,13 @@ fn runWptParserSuite(alloc: std.mem.Allocator, mode: []const u8, max_cases: usiz
     }.lt);
 
     var cases = std.ArrayList(ParserCase).empty;
-    defer {
-        for (cases.items) |c| {
-            alloc.free(c.html);
-            for (c.expected) |tag| alloc.free(tag);
-            alloc.free(c.expected);
-        }
-        cases.deinit(alloc);
-    }
+    defer deinitParserCaseList(alloc, &cases);
 
     for (html_names.items) |name| {
         const path = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ wpt_dir, name });
         defer alloc.free(path);
-        try parseWptHtmlSuiteFile(alloc, path, &cases);
+        const parsed_cases = try parseWptHtmlSuiteFile(io, alloc, path);
+        try transferOwnedParserCases(alloc, &cases, parsed_cases);
     }
 
     if (cases.items.len == 0 and html_names.items.len != 0) {
@@ -2167,17 +2285,16 @@ fn runWptParserSuite(alloc: std.mem.Allocator, mode: []const u8, max_cases: usiz
             .summary = .{
                 .total = total,
                 .passed = 0,
-                .failed = total,
                 .examples = try examples.toOwnedSlice(alloc),
             },
             .failures = try failures.toOwnedSlice(alloc),
         };
     }
 
-    return runParserCases(alloc, mode, cases.items, max_cases);
+    return runParserCases(io, alloc, mode, cases.items, max_cases);
 }
 
-fn runExternalSuites(alloc: std.mem.Allocator, args: []const []const u8) !void {
+fn runExternalSuites(io: std.Io, alloc: std.mem.Allocator, args: []const [:0]const u8) !void {
     var mode_arg: []const u8 = "both";
     var max_cases: usize = 600;
     var max_whatwg_cases: usize = 500;
@@ -2210,9 +2327,9 @@ fn runExternalSuites(alloc: std.mem.Allocator, args: []const []const u8) !void {
         } else return error.InvalidArgument;
     }
 
-    try ensureSuites(alloc);
-    try buildSuiteRunner(alloc);
-    try common.ensureDir(RESULTS_DIR);
+    try ensureSuites(io, alloc);
+    try buildSuiteRunner(io, alloc);
+    try common.ensureDir(io, RESULTS_DIR);
 
     const modes = if (std.mem.eql(u8, mode_arg, "both")) &[_][]const u8{ "strictest", "fastest" } else &[_][]const u8{mode_arg};
     var mode_reports = std.ArrayList(struct {
@@ -2229,9 +2346,9 @@ fn runExternalSuites(alloc: std.mem.Allocator, args: []const []const u8) !void {
     defer mode_reports.deinit(alloc);
 
     for (modes) |mode| {
-        const sel = try runSelectorSuites(alloc, mode);
-        const parser_html5lib = try runHtml5libParserSuite(alloc, mode, max_cases);
-        const parser_whatwg = try runWptParserSuite(alloc, mode, max_whatwg_cases);
+        const sel = try runSelectorSuites(io, alloc, mode);
+        const parser_html5lib = try runHtml5libParserSuite(io, alloc, mode, max_cases);
+        const parser_whatwg = try runWptParserSuite(io, alloc, mode, max_whatwg_cases);
         try mode_reports.append(alloc, .{
             .mode = mode,
             .nw = sel.nw,
@@ -2246,24 +2363,24 @@ fn runExternalSuites(alloc: std.mem.Allocator, args: []const []const u8) !void {
 
         std.debug.print("Mode: {s}\n", .{mode});
         std.debug.print("  Selector suites:\n", .{});
-        std.debug.print("    nwmatcher: {d}/{d} passed ({d} failed)\n", .{ sel.nw.passed, sel.nw.total, sel.nw.failed });
-        std.debug.print("    qwery_contextual: {d}/{d} passed ({d} failed)\n", .{ sel.qw.passed, sel.qw.total, sel.qw.failed });
+        std.debug.print("    nwmatcher: {d}/{d} passed ({d} failed)\n", .{ sel.nw.passed, sel.nw.total, failedCount(sel.nw) });
+        std.debug.print("    qwery_contextual: {d}/{d} passed ({d} failed)\n", .{ sel.qw.passed, sel.qw.total, failedCount(sel.qw) });
         std.debug.print("  Parser suites:\n", .{});
         std.debug.print("    html5lib tree-construction subset: {d}/{d} passed ({d} failed)\n", .{
             parser_html5lib.summary.passed,
             parser_html5lib.summary.total,
-            parser_html5lib.summary.failed,
+            failedCount(parser_html5lib.summary),
         });
         std.debug.print("    WHATWG HTML parsing (WPT html5lib_* corpus): {d}/{d} passed ({d} failed)\n", .{
             parser_whatwg.summary.passed,
             parser_whatwg.summary.total,
-            parser_whatwg.summary.failed,
+            failedCount(parser_whatwg.summary),
         });
     }
 
-    var json_buf = std.ArrayList(u8).empty;
-    defer json_buf.deinit(alloc);
-    const jw = json_buf.writer(alloc);
+    var json_buf: std.Io.Writer.Allocating = .init(alloc);
+    defer json_buf.deinit();
+    const jw = &json_buf.writer;
     try jw.writeAll("{\"modes\":{");
     for (mode_reports.items, 0..) |mr, idx_mode| {
         if (idx_mode != 0) try jw.writeAll(",");
@@ -2271,23 +2388,23 @@ fn runExternalSuites(alloc: std.mem.Allocator, args: []const []const u8) !void {
         try jw.print("\"selector_suites\":{{\"nwmatcher\":{{\"total\":{d},\"passed\":{d},\"failed\":{d}}},\"qwery_contextual\":{{\"total\":{d},\"passed\":{d},\"failed\":{d}}}}},", .{
             mr.nw.total,
             mr.nw.passed,
-            mr.nw.failed,
+            failedCount(mr.nw),
             mr.qw.total,
             mr.qw.passed,
-            mr.qw.failed,
+            failedCount(mr.qw),
         });
         try jw.print("\"parser_suites\":{{\"html5lib_subset\":{{\"total\":{d},\"passed\":{d},\"failed\":{d}}},\"whatwg_html_parsing\":{{\"total\":{d},\"passed\":{d},\"failed\":{d}}}}}", .{
             mr.parser_html5lib.total,
             mr.parser_html5lib.passed,
-            mr.parser_html5lib.failed,
+            failedCount(mr.parser_html5lib),
             mr.parser_whatwg.total,
             mr.parser_whatwg.passed,
-            mr.parser_whatwg.failed,
+            failedCount(mr.parser_whatwg),
         });
         try jw.writeAll("}");
     }
     try jw.writeAll("}}");
-    try common.writeFile(json_out, json_buf.items);
+    try common.writeFile(io, json_out, json_buf.written());
     std.debug.print("Wrote report: {s}\n", .{json_out});
 
     var failure_modes = std.ArrayList(ModeFailuresOut).empty;
@@ -2309,18 +2426,18 @@ fn runExternalSuites(alloc: std.mem.Allocator, args: []const []const u8) !void {
     const failure_json_out: ExternalFailuresOut = .{
         .modes = failure_modes.items,
     };
-    var failure_json_writer: std.io.Writer.Allocating = .init(alloc);
+    var failure_json_writer: std.Io.Writer.Allocating = .init(alloc);
     defer failure_json_writer.deinit();
     var failure_json_stream: std.json.Stringify = .{
         .writer = &failure_json_writer.writer,
         .options = .{ .whitespace = .indent_2 },
     };
     try failure_json_stream.write(failure_json_out);
-    try common.writeFile(failures_out, failure_json_writer.written());
+    try common.writeFile(io, failures_out, failure_json_writer.written());
     std.debug.print("Wrote failures: {s}\n", .{failures_out});
 
     if (std.mem.eql(u8, json_out, "bench/results/external_suite_report.json")) {
-        try updateReadmeAutoSummary(alloc);
+        try updateReadmeAutoSummary(io, alloc);
     }
 }
 
@@ -2328,9 +2445,9 @@ fn cmpStringSlice(_: void, a: []const u8, b: []const u8) bool {
     return std.mem.lessThan(u8, a, b);
 }
 
-fn collectMarkdownFiles(alloc: std.mem.Allocator) ![][]const u8 {
+fn collectMarkdownFiles(io: std.Io, alloc: std.mem.Allocator) ![][]const u8 {
     var files = std.ArrayList([]const u8).empty;
-    errdefer files.deinit(alloc);
+    errdefer deinitOwnedStringList(alloc, &files);
 
     const root_docs = [_][]const u8{
         "README.md",
@@ -2341,21 +2458,22 @@ fn collectMarkdownFiles(alloc: std.mem.Allocator) ![][]const u8 {
         "bench/README.md",
     };
     for (root_docs) |p| {
-        if (common.fileExists(p)) {
-            try files.append(alloc, try alloc.dupe(u8, p));
+        if (common.fileExists(io, p)) {
+            const path_copy = try alloc.dupe(u8, p);
+            try appendOwnedString(alloc, &files, path_copy);
         }
     }
 
-    if (common.fileExists("docs")) {
-        var docs_dir = try std.fs.cwd().openDir("docs", .{ .iterate = true });
-        defer docs_dir.close();
+    if (common.fileExists(io, "docs")) {
+        var docs_dir = try std.Io.Dir.cwd().openDir(io, "docs", .{ .iterate = true });
+        defer docs_dir.close(io);
         var walker = try docs_dir.walk(alloc);
         defer walker.deinit();
-        while (try walker.next()) |entry| {
+        while (try walker.next(io)) |entry| {
             if (entry.kind != .file) continue;
             if (!std.mem.endsWith(u8, entry.path, ".md")) continue;
             const joined = try std.fs.path.join(alloc, &[_][]const u8{ "docs", entry.path });
-            try files.append(alloc, joined);
+            try appendOwnedString(alloc, &files, joined);
         }
     }
 
@@ -2363,30 +2481,31 @@ fn collectMarkdownFiles(alloc: std.mem.Allocator) ![][]const u8 {
     return files.toOwnedSlice(alloc);
 }
 
-fn collectExampleFiles(alloc: std.mem.Allocator) ![][]const u8 {
+fn collectExampleFiles(io: std.Io, alloc: std.mem.Allocator) ![][]const u8 {
     var files = std.ArrayList([]const u8).empty;
-    errdefer files.deinit(alloc);
+    errdefer deinitOwnedStringList(alloc, &files);
 
-    var examples_dir = try std.fs.cwd().openDir("examples", .{ .iterate = true });
-    defer examples_dir.close();
+    var examples_dir = try std.Io.Dir.cwd().openDir(io, "examples", .{ .iterate = true });
+    defer examples_dir.close(io);
     var walker = try examples_dir.walk(alloc);
     defer walker.deinit();
-    while (try walker.next()) |entry| {
+    while (try walker.next(io)) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.endsWith(u8, entry.path, ".zig")) continue;
         const joined = try std.fs.path.join(alloc, &[_][]const u8{ "examples", entry.path });
-        try files.append(alloc, joined);
+        try appendOwnedString(alloc, &files, joined);
     }
 
     std.mem.sort([]const u8, files.items, {}, cmpStringSlice);
     return files.toOwnedSlice(alloc);
 }
 
-fn loadBuildStepSet(alloc: std.mem.Allocator) !std.StringHashMap(void) {
-    const out = try common.runCaptureStdout(alloc, &[_][]const u8{ "zig", "build", "--list-steps" }, REPO_ROOT);
+fn loadBuildStepSet(io: std.Io, alloc: std.mem.Allocator) !std.StringHashMap(void) {
+    const out = try common.runCaptureStdout(io, alloc, &[_][]const u8{ "zig", "build", "--list-steps" }, REPO_ROOT);
     defer alloc.free(out);
 
     var set = std.StringHashMap(void).init(alloc);
+    errdefer deinitOwnedStringSet(alloc, &set);
     var lines = std.mem.splitScalar(u8, out, '\n');
     while (lines.next()) |line_raw| {
         const line = std.mem.trim(u8, line_raw, " \t\r");
@@ -2394,76 +2513,67 @@ fn loadBuildStepSet(alloc: std.mem.Allocator) !std.StringHashMap(void) {
         const first_ws = std.mem.indexOfAny(u8, line, " \t") orelse line.len;
         const step = line[0..first_ws];
         if (step.len == 0) continue;
-        try set.put(try alloc.dupe(u8, step), {});
+        const step_copy = try alloc.dupe(u8, step);
+        try putOwnedString(alloc, &set, step_copy);
     }
     return set;
 }
 
-fn trimMarkdownLinkTarget(raw: []const u8) []const u8 {
-    var target = std.mem.trim(u8, raw, " \t\r");
+fn validateMarkdownLink(io: std.Io, alloc: std.mem.Allocator, md_path: []const u8, line_no: usize, target_raw: []const u8) !bool {
+    var target = std.mem.trim(u8, target_raw, " \t\r");
     if (target.len >= 2 and target[0] == '<' and target[target.len - 1] == '>') {
         target = target[1 .. target.len - 1];
     }
-    if (target.len == 0) return target;
+    if (target.len == 0) return true;
     if (target[0] != '<') {
         const ws_idx = std.mem.indexOfAny(u8, target, " \t\r") orelse target.len;
         target = target[0..ws_idx];
     }
-    return target;
-}
+    if (target.len == 0) return true;
+    if (target[0] == '#') return true;
+    if (std.mem.startsWith(u8, target, "http://") or
+        std.mem.startsWith(u8, target, "https://") or
+        std.mem.startsWith(u8, target, "mailto:") or
+        std.mem.startsWith(u8, target, "tel:") or
+        std.mem.indexOf(u8, target, "://") != null)
+    {
+        return true;
+    }
 
-fn sliceBeforeFirstAny(haystack: []const u8, chars: []const u8) []const u8 {
-    const idx = std.mem.indexOfAny(u8, haystack, chars) orelse haystack.len;
-    return haystack[0..idx];
-}
-
-fn isRemoteLink(target: []const u8) bool {
-    if (std.mem.startsWith(u8, target, "http://")) return true;
-    if (std.mem.startsWith(u8, target, "https://")) return true;
-    if (std.mem.startsWith(u8, target, "mailto:")) return true;
-    if (std.mem.startsWith(u8, target, "tel:")) return true;
-    return std.mem.indexOf(u8, target, "://") != null;
-}
-
-fn validateMarkdownLink(alloc: std.mem.Allocator, md_path: []const u8, line_no: usize, target_raw: []const u8, ok: *bool) !void {
-    const target = trimMarkdownLinkTarget(target_raw);
-    if (target.len == 0) return;
-    if (target[0] == '#') return;
-    if (isRemoteLink(target)) return;
-
-    const path_only = sliceBeforeFirstAny(target, "#?");
-    if (path_only.len == 0) return;
+    const path_end = std.mem.indexOfAny(u8, target, "#?") orelse target.len;
+    const path_only = target[0..path_end];
+    if (path_only.len == 0) return true;
 
     if (std.mem.startsWith(u8, path_only, "/")) {
         std.debug.print("docs-check: {s}:{d}: absolute markdown path is not allowed: {s}\n", .{ md_path, line_no, target });
-        ok.* = false;
-        return;
+        return false;
     }
 
     const base_dir = std.fs.path.dirname(md_path) orelse ".";
     const resolved = try std.fs.path.join(alloc, &[_][]const u8{ base_dir, path_only });
     defer alloc.free(resolved);
 
-    if (common.fileExists(resolved)) return;
+    if (common.fileExists(io, resolved)) return true;
 
     if (std.mem.endsWith(u8, path_only, "/")) {
         const with_readme = try std.fs.path.join(alloc, &[_][]const u8{ resolved, "README.md" });
         defer alloc.free(with_readme);
-        if (common.fileExists(with_readme)) return;
+        if (common.fileExists(io, with_readme)) return true;
     }
 
     std.debug.print("docs-check: {s}:{d}: unresolved markdown link: {s}\n", .{ md_path, line_no, target });
-    ok.* = false;
+    return false;
 }
 
-fn checkMarkdownLinks(alloc: std.mem.Allocator, md_path: []const u8, content: []const u8, ok: *bool) !void {
+fn checkMarkdownLinks(io: std.Io, alloc: std.mem.Allocator, md_path: []const u8, content: []const u8) !bool {
+    var ok = true;
     var in_fence = false;
     var line_no: usize = 0;
     var lines = std.mem.splitScalar(u8, content, '\n');
     while (lines.next()) |line_raw| {
         line_no += 1;
-        const line = std.mem.trimRight(u8, line_raw, "\r");
-        const trimmed = std.mem.trimLeft(u8, line, " \t");
+        const line = std.mem.trimEnd(u8, line_raw, "\r");
+        const trimmed = std.mem.trimStart(u8, line, " \t");
         if (std.mem.startsWith(u8, trimmed, "```")) {
             in_fence = !in_fence;
             continue;
@@ -2485,20 +2595,22 @@ fn checkMarkdownLinks(alloc: std.mem.Allocator, md_path: []const u8, content: []
                 i = close + 2;
                 continue;
             };
-            try validateMarkdownLink(alloc, md_path, line_no, line[close + 2 .. end], ok);
+            ok = (try validateMarkdownLink(io, alloc, md_path, line_no, line[close + 2 .. end])) and ok;
             i = end + 1;
         }
     }
+    return ok;
 }
 
-fn checkLocalAbsolutePaths(md_path: []const u8, content: []const u8, ok: *bool) void {
+fn checkLocalAbsolutePaths(md_path: []const u8, content: []const u8) bool {
     if (std.mem.indexOf(u8, content, "/home/") != null or
         std.mem.indexOf(u8, content, "/Users/") != null or
         std.mem.indexOf(u8, content, "C:\\Users\\") != null)
     {
         std.debug.print("docs-check: {s}: contains machine-local absolute path\n", .{md_path});
-        ok.* = false;
+        return false;
     }
+    return true;
 }
 
 fn parseStepAfterBuild(content: []const u8, start: usize) ?[]const u8 {
@@ -2518,7 +2630,8 @@ fn parseStepAfterBuild(content: []const u8, start: usize) ?[]const u8 {
     return null;
 }
 
-fn checkDocumentedBuildCommands(md_path: []const u8, content: []const u8, step_set: *const std.StringHashMap(void), ok: *bool) void {
+fn checkDocumentedBuildCommands(md_path: []const u8, content: []const u8, step_set: std.StringHashMap(void)) bool {
+    var ok = true;
     var pos: usize = 0;
     while (std.mem.indexOfPos(u8, content, pos, "zig build")) |found| {
         if (found > 0 and !std.ascii.isWhitespace(content[found - 1]) and content[found - 1] != '`') {
@@ -2538,18 +2651,18 @@ fn checkDocumentedBuildCommands(md_path: []const u8, content: []const u8, step_s
         };
         if (!step_set.contains(step)) {
             std.debug.print("docs-check: {s}: references unknown zig build step '{s}'\n", .{ md_path, step });
-            ok.* = false;
+            ok = false;
         }
         pos = found + 1;
     }
+    return ok;
 }
 
-fn checkChangelogCompatibilityLabels(content: []const u8, ok: *bool) void {
+fn checkChangelogCompatibilityLabels(content: []const u8) bool {
     const header = "## [Unreleased]";
     const start = std.mem.indexOf(u8, content, header) orelse {
         std.debug.print("docs-check: CHANGELOG.md: missing '## [Unreleased]' section\n", .{});
-        ok.* = false;
-        return;
+        return false;
     };
 
     const after = content[start + header.len ..];
@@ -2561,32 +2674,37 @@ fn checkChangelogCompatibilityLabels(content: []const u8, ok: *bool) void {
         "Migration:",
         "Downstream scope:",
     };
+    var ok = true;
     for (required) |needle| {
         if (std.mem.indexOf(u8, section, needle) == null) {
             std.debug.print("docs-check: CHANGELOG.md: Unreleased section missing compatibility label '{s}'\n", .{needle});
-            ok.* = false;
+            ok = false;
         }
     }
+    return ok;
 }
 
-fn runDocsCheck(alloc: std.mem.Allocator) !void {
-    const markdown_files = try collectMarkdownFiles(alloc);
-    defer alloc.free(markdown_files);
-    var step_set = try loadBuildStepSet(alloc);
-    defer step_set.deinit();
+fn runDocsCheck(io: std.Io, alloc: std.mem.Allocator) !void {
+    const markdown_files = try collectMarkdownFiles(io, alloc);
+    defer {
+        for (markdown_files) |path| alloc.free(path);
+        alloc.free(markdown_files);
+    }
+    var step_set = try loadBuildStepSet(io, alloc);
+    defer deinitOwnedStringSet(alloc, &step_set);
 
     var ok = true;
     var checked: usize = 0;
     for (markdown_files) |md_path| {
-        const content = try common.readFileAlloc(alloc, md_path);
+        const content = try common.readFileAlloc(io, alloc, md_path);
         defer alloc.free(content);
         checked += 1;
 
-        checkLocalAbsolutePaths(md_path, content, &ok);
-        try checkMarkdownLinks(alloc, md_path, content, &ok);
-        checkDocumentedBuildCommands(md_path, content, &step_set, &ok);
+        ok = checkLocalAbsolutePaths(md_path, content) and ok;
+        ok = (try checkMarkdownLinks(io, alloc, md_path, content)) and ok;
+        ok = checkDocumentedBuildCommands(md_path, content, step_set) and ok;
         if (std.mem.eql(u8, md_path, "CHANGELOG.md")) {
-            checkChangelogCompatibilityLabels(content, &ok);
+            ok = checkChangelogCompatibilityLabels(content) and ok;
         }
     }
 
@@ -2594,14 +2712,18 @@ fn runDocsCheck(alloc: std.mem.Allocator) !void {
     std.debug.print("docs-check: OK ({d} markdown files)\n", .{checked});
 }
 
-fn runExamplesCheck(alloc: std.mem.Allocator) !void {
-    const example_files = try collectExampleFiles(alloc);
-    defer alloc.free(example_files);
+fn runExamplesCheck(io: std.Io, alloc: std.mem.Allocator) !void {
+    const example_files = try collectExampleFiles(io, alloc);
+    defer {
+        for (example_files) |path| alloc.free(path);
+        alloc.free(example_files);
+    }
     if (example_files.len == 0) return error.NoExamplesFound;
 
     for (example_files) |example_path| {
         std.debug.print("examples-check: zig test {s}\n", .{example_path});
         const root_mod = try std.fmt.allocPrint(alloc, "-Mroot={s}", .{example_path});
+        defer alloc.free(root_mod);
         const html_mod = "-Mhtmlparser=src/root.zig";
         const argv = [_][]const u8{
             "zig",
@@ -2611,7 +2733,7 @@ fn runExamplesCheck(alloc: std.mem.Allocator) !void {
             root_mod,
             html_mod,
         };
-        try common.runInherit(alloc, &argv, REPO_ROOT);
+        try common.runInherit(io, alloc, &argv, REPO_ROOT);
     }
     std.debug.print("examples-check: OK ({d} examples)\n", .{example_files.len});
 }
@@ -2631,13 +2753,10 @@ fn usage() void {
 }
 
 /// CLI entrypoint for repository maintenance, benchmarking, and conformance tasks.
-pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const alloc = arena.allocator();
-
-    const args = try std.process.argsAlloc(alloc);
-    defer std.process.argsFree(alloc, args);
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
+    const alloc = init.gpa;
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len < 2) {
         usage();
         return;
@@ -2646,7 +2765,7 @@ pub fn main() !void {
     const rest = args[2..];
 
     if (std.mem.eql(u8, cmd, "setup-parsers")) {
-        try setupParsers(alloc);
+        try setupParsers(io, alloc);
         return;
     }
     if (std.mem.eql(u8, cmd, "setup-fixtures")) {
@@ -2656,32 +2775,160 @@ pub fn main() !void {
                 refresh = true;
             } else return error.InvalidArgument;
         }
-        try setupFixtures(alloc, refresh);
+        try setupFixtures(io, alloc, refresh);
         return;
     }
     if (std.mem.eql(u8, cmd, "run-benchmarks")) {
-        try runBenchmarks(alloc, rest);
+        try runBenchmarks(io, alloc, rest);
         return;
     }
     if (std.mem.eql(u8, cmd, "sync-docs-bench")) {
         if (rest.len != 0) return error.InvalidArgument;
-        try updateDocumentationBenchmarkSnapshot(alloc);
-        try updateReadmeAutoSummary(alloc);
+        try updateDocumentationBenchmarkSnapshot(io, alloc);
+        try updateReadmeAutoSummary(io, alloc);
         return;
     }
     if (std.mem.eql(u8, cmd, "run-external-suites")) {
-        try runExternalSuites(alloc, rest);
+        try runExternalSuites(io, alloc, rest);
         return;
     }
     if (std.mem.eql(u8, cmd, "docs-check")) {
-        try runDocsCheck(alloc);
+        try runDocsCheck(io, alloc);
         return;
     }
     if (std.mem.eql(u8, cmd, "examples-check")) {
-        try runExamplesCheck(alloc);
+        try runExamplesCheck(io, alloc);
         return;
     }
 
     usage();
     return error.InvalidCommand;
+}
+
+test "bench cleanup frees sample buffers" {
+    const alloc = std.testing.allocator;
+
+    var empty_parse: [0]ParseResult = .{};
+    freeParseSamples(alloc, &empty_parse);
+
+    const parse_samples = try alloc.alloc(u64, 2);
+    parse_samples[0] = 1;
+    parse_samples[1] = 2;
+    var parse_rows = [_]ParseResult{.{
+        .parser = "ours",
+        .fixture = "fixture.html",
+        .iterations = 1,
+        .samples_ns = parse_samples,
+        .median_ns = 1,
+        .throughput_mb_s = 1.0,
+    }};
+    freeParseSamples(alloc, &parse_rows);
+
+    const query_samples = try alloc.alloc(u64, 1);
+    query_samples[0] = 3;
+    var query_rows = [_]QueryResult{.{
+        .parser = "ours",
+        .case = "case",
+        .selector = "div",
+        .fixture = null,
+        .iterations = 1,
+        .samples_ns = query_samples,
+        .median_ns = 1,
+        .ops_s = 1.0,
+        .ns_per_op = 1.0,
+    }};
+    freeQuerySamples(alloc, &query_rows);
+
+    var empty_query: [0]QueryResult = .{};
+    freeQuerySamples(alloc, &empty_query);
+}
+
+test "owned string list cleanup frees entries" {
+    const alloc = std.testing.allocator;
+    var empty = std.ArrayList([]const u8).empty;
+    deinitOwnedStringList(alloc, &empty);
+    var list = std.ArrayList([]const u8).empty;
+    const one = try alloc.dupe(u8, "one");
+    try appendOwnedString(alloc, &list, one);
+    const two = try alloc.dupe(u8, "two");
+    try appendOwnedString(alloc, &list, two);
+    deinitOwnedStringList(alloc, &list);
+}
+
+test "owned string set cleanup frees keys" {
+    const alloc = std.testing.allocator;
+    var empty = std.StringHashMap(void).init(alloc);
+    deinitOwnedStringSet(alloc, &empty);
+
+    var set = std.StringHashMap(void).init(alloc);
+    const docs_check = try alloc.dupe(u8, "docs-check");
+    try putOwnedString(alloc, &set, docs_check);
+    const examples_check = try alloc.dupe(u8, "examples-check");
+    try putOwnedString(alloc, &set, examples_check);
+    deinitOwnedStringSet(alloc, &set);
+}
+
+test "parser case transfer frees nested ownership on append failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn makeOneCase(alloc: std.mem.Allocator) ![]ParserCase {
+            const html = try alloc.dupe(u8, "<div></div>");
+            errdefer alloc.free(html);
+
+            var expected = std.ArrayList([]const u8).empty;
+            errdefer deinitOwnedStringList(alloc, &expected);
+            const div = try alloc.dupe(u8, "div");
+            try appendOwnedString(alloc, &expected, div);
+
+            const expected_slice = try expected.toOwnedSlice(alloc);
+            errdefer freeOwnedStringSlice(alloc, expected_slice);
+
+            const cases = try alloc.alloc(ParserCase, 1);
+            errdefer alloc.free(cases);
+            cases[0] = .{
+                .html = html,
+                .expected = expected_slice,
+            };
+            return cases;
+        }
+
+        fn run(alloc: std.mem.Allocator) !void {
+            var dst = std.ArrayList(ParserCase).empty;
+            defer deinitParserCaseList(alloc, &dst);
+
+            const cases = try makeOneCase(alloc);
+            try transferOwnedParserCases(alloc, &dst, cases);
+        }
+    }.run, .{});
+}
+
+test "html5lib dat parser frees nested allocations on allocator failure" {
+    const sample =
+        "#data\n" ++
+        "<div></div>\n" ++
+        "#document\n" ++
+        "| <html>\n" ++
+        "|   <head>\n" ++
+        "|   <body>\n" ++
+        "|     <div>\n";
+
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(alloc: std.mem.Allocator, text: []const u8) !void {
+            const cases = try parseHtml5libDatText(alloc, text);
+            defer freeParserCases(alloc, cases);
+        }
+    }.run, .{sample});
+}
+
+test "wpt html suite parser frees nested allocations on allocator failure" {
+    const sample =
+        "var tests = {};\n" ++
+        "init_tests();\n" ++
+        "[async_test('case'), \"%3Cdiv%3E%3C/div%3E\", \"| <html>\\n|   <head>\\n|   <body>\\n|     <div>\"]\n";
+
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(alloc: std.mem.Allocator, text: []const u8) !void {
+            const cases = try parseWptHtmlSuiteText(alloc, text);
+            defer freeParserCases(alloc, cases);
+        }
+    }.run, .{sample});
 }

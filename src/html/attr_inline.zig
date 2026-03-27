@@ -1,20 +1,16 @@
 const std = @import("std");
 const tables = @import("tables.zig");
+const attr_scan = @import("attr_scan.zig");
 const entities = @import("entities.zig");
 const scanner = @import("scanner.zig");
 
-const RawKind = enum {
-    empty,
-    quoted,
-    naked,
-};
+// SAFETY: This module mutates `doc.source` in-place for attribute decoding.
+// Invariants:
+// - `node.attr_end` and `node.name_or_text.end` are within `doc.source.len`.
+// - Attribute spans passed to helpers are bounded by `span_end`.
+// - Callers uphold that `source` is the document buffer for the node.
 
-const RawValue = struct {
-    kind: RawKind,
-    start: usize,
-    end: usize,
-    next_start: usize,
-};
+const RawValue = attr_scan.RawValue;
 
 const LookupKind = enum(u8) {
     generic,
@@ -22,9 +18,6 @@ const LookupKind = enum(u8) {
     class,
     href,
 };
-
-const FnvOffset: u32 = 2166136261;
-const FnvPrime: u32 = 16777619;
 
 // Attribute traversal and value materialization are intentionally in-place.
 // Wire states after name parsing:
@@ -36,7 +29,7 @@ pub fn getAttrValue(noalias doc_ptr: anytype, node: anytype, name: []const u8) ?
     const mut_doc = @constCast(doc_ptr);
     const source: []u8 = mut_doc.source;
     const lookup_kind = classifyLookupName(name);
-    const lookup_hash = if (lookup_kind == .generic) hashIgnoreCaseAscii(name) else 0;
+    const lookup_hash = if (lookup_kind == .generic) tables.hashIgnoreCaseAscii(name) else 0;
 
     var i: usize = node.name_or_text.end;
     const end: usize = @intCast(node.attr_end);
@@ -50,10 +43,10 @@ pub fn getAttrValue(noalias doc_ptr: anytype, node: anytype, name: []const u8) ?
         if (c == '>' or c == '/') return null;
 
         const name_start = i;
-        var attr_name_hash: u32 = FnvOffset;
+        var attr_name_hash: u32 = tables.FnvOffset;
         while (i < end and tables.IdentCharTable[source[i]]) : (i += 1) {
             if (lookup_kind == .generic) {
-                attr_name_hash = hashIgnoreCaseAsciiUpdate(attr_name_hash, source[i]);
+                attr_name_hash = tables.hashIgnoreCaseAsciiUpdate(attr_name_hash, source[i]);
             }
         }
         if (i == name_start) {
@@ -72,7 +65,7 @@ pub fn getAttrValue(noalias doc_ptr: anytype, node: anytype, name: []const u8) ?
 
         const delim = source[i];
         if (delim == '=') {
-            const raw = parseRawValue(source, end, i);
+            const raw = attr_scan.parseRawValue(source, end, i);
             if (is_target) {
                 return materializeRawValue(source, end, i, raw);
             }
@@ -81,7 +74,7 @@ pub fn getAttrValue(noalias doc_ptr: anytype, node: anytype, name: []const u8) ?
         }
 
         if (delim == 0) {
-            const parsed = parseParsedValue(source, end, i);
+            const parsed = attr_scan.parseParsedValue(source, end, i);
             if (is_target) return parsed.value;
             i = parsed.next_start;
             continue;
@@ -121,17 +114,10 @@ pub fn collectSelectedValues(noalias doc_ptr: anytype, node: anytype, selected_n
         while (i < end and tables.WhitespaceTable[source[i]]) : (i += 1) {}
         if (i >= end) break;
 
-        const c = source[i];
-        if (c == '>' or c == '/') break;
-
-        const name_start = i;
-        while (i < end and tables.IdentCharTable[source[i]]) : (i += 1) {}
-        if (i == name_start) {
-            i += 1;
-            continue;
-        }
-
-        const name_slice = source[name_start..i];
+        const scanned = attr_scan.scanAttrNameOrSkip(source, end, i);
+        const name_slice = scanned.name orelse break;
+        i = scanned.next_start;
+        if (name_slice.len == 0) continue;
         const selected_idx = firstUnresolvedMatch(selected_names, out_values, name_slice);
 
         if (i >= end) {
@@ -145,10 +131,10 @@ pub fn collectSelectedValues(noalias doc_ptr: anytype, node: anytype, selected_n
         const delim = source[i];
         if (delim == '=') {
             const eq_index = i;
-            const raw = parseRawValue(source, end, eq_index);
+            const raw = attr_scan.parseRawValue(source, end, eq_index);
             if (selected_idx) |idx| {
                 out_values[idx] = materializeRawValue(source, end, eq_index, raw);
-                const parsed = parseParsedValue(source, end, eq_index);
+                const parsed = attr_scan.parseParsedValue(source, end, eq_index);
                 i = parsed.next_start;
                 remaining -= 1;
                 if (remaining == 0) return;
@@ -159,7 +145,7 @@ pub fn collectSelectedValues(noalias doc_ptr: anytype, node: anytype, selected_n
         }
 
         if (delim == 0) {
-            const parsed = parseParsedValue(source, end, i);
+            const parsed = attr_scan.parseParsedValue(source, end, i);
             i = parsed.next_start;
             if (selected_idx) |idx| {
                 out_values[idx] = parsed.value;
@@ -213,9 +199,9 @@ pub fn collectSelectedValuesByHash(
         if (c == '>' or c == '/') break;
 
         const name_start = i;
-        var name_hash: u32 = FnvOffset;
+        var name_hash: u32 = tables.FnvOffset;
         while (i < end and tables.IdentCharTable[source[i]]) : (i += 1) {
-            name_hash = hashIgnoreCaseAsciiUpdate(name_hash, source[i]);
+            name_hash = tables.hashIgnoreCaseAsciiUpdate(name_hash, source[i]);
         }
         if (i == name_start) {
             i += 1;
@@ -242,10 +228,10 @@ pub fn collectSelectedValuesByHash(
         const delim = source[i];
         if (delim == '=') {
             const eq_index = i;
-            const raw = parseRawValue(source, end, eq_index);
+            const raw = attr_scan.parseRawValue(source, end, eq_index);
             if (selected_idx) |idx| {
                 out_values[idx] = materializeRawValue(source, end, eq_index, raw);
-                const parsed = parseParsedValue(source, end, eq_index);
+                const parsed = attr_scan.parseParsedValue(source, end, eq_index);
                 i = parsed.next_start;
                 remaining -= 1;
                 if (remaining == 0) return;
@@ -256,7 +242,7 @@ pub fn collectSelectedValuesByHash(
         }
 
         if (delim == 0) {
-            const parsed = parseParsedValue(source, end, i);
+            const parsed = attr_scan.parseParsedValue(source, end, i);
             i = parsed.next_start;
             if (selected_idx) |idx| {
                 out_values[idx] = parsed.value;
@@ -281,59 +267,13 @@ pub fn collectSelectedValuesByHash(
     }
 }
 
-const ParsedValue = struct {
-    value: []const u8,
-    next_start: usize,
-};
-
-fn parseParsedValue(source: []u8, span_end: usize, name_end: usize) ParsedValue {
-    // Parsed layout can be:
-    // - name\0\0value\0...
-    // - name\0value\0...
-    if (name_end + 1 >= span_end) return .{ .value = "", .next_start = span_end };
-
-    const marker = source[name_end + 1];
-    var value_start: usize = if (marker == 0) name_end + 2 else name_end + 1;
-    if (value_start > span_end) value_start = span_end;
-
-    const value_end = findValueEnd(source, value_start, span_end);
-    const next = nextAfterValue(source, value_end, span_end);
-    return .{ .value = source[value_start..value_end], .next_start = next };
-}
-
-fn parseRawValue(source: []u8, span_end: usize, eq_index: usize) RawValue {
-    var i = eq_index + 1;
-    while (i < span_end and tables.WhitespaceTable[source[i]]) : (i += 1) {}
-
-    if (i >= span_end) {
-        return .{ .kind = .empty, .start = i, .end = i, .next_start = i };
-    }
-
-    const c = source[i];
-    if (c == '>' or c == '/') {
-        return .{ .kind = .empty, .start = i, .end = i, .next_start = i };
-    }
-
-    if (c == '\'' or c == '"') {
-        const j = scanner.findByte(source, i + 1, c) orelse span_end;
-        const next_start = if (j < span_end) j + 1 else span_end;
-        return .{ .kind = .quoted, .start = i + 1, .end = j, .next_start = next_start };
-    }
-
-    var j = i;
-    while (j < span_end) : (j += 1) {
-        const b = source[j];
-        if (b == '>' or b == '/' or tables.WhitespaceTable[b]) break;
-    }
-
-    if (j == i) {
-        return .{ .kind = .empty, .start = i, .end = i, .next_start = j };
-    }
-
-    return .{ .kind = .naked, .start = i, .end = j, .next_start = j };
-}
+const ParsedValue = attr_scan.ParsedValue;
 
 fn materializeRawValue(source: []u8, span_end: usize, eq_index: usize, raw: RawValue) []const u8 {
+    std.debug.assert(span_end <= source.len);
+    std.debug.assert(eq_index < span_end);
+    std.debug.assert(raw.start <= raw.end and raw.end <= span_end);
+    std.debug.assert(raw.next_start <= span_end);
     if (raw.kind == .empty) {
         // Canonical rewrite for explicit empty assignment: `a=` -> `a `.
         source[eq_index] = ' ';
@@ -378,46 +318,14 @@ fn materializeRawValue(source: []u8, span_end: usize, eq_index: usize, raw: RawV
     return source[dst..term];
 }
 
-fn findValueEnd(source: []const u8, value_start: usize, span_end: usize) usize {
-    var i = value_start;
-    while (i < span_end and source[i] != 0) : (i += 1) {}
-    return i;
-}
-
-fn nextAfterValue(source: []const u8, value_end: usize, span_end: usize) usize {
-    if (value_end >= span_end) return span_end;
-    var i = value_end + 1;
-    if (i >= span_end) return span_end;
-
-    if (source[i] == 0) {
-        if (i + 1 >= span_end) return span_end;
-
-        const len_byte = source[i + 1];
-        if (len_byte == 0xff) {
-            if (i + 6 > span_end) return span_end;
-            const skip = std.mem.readInt(u32, source[i + 2 .. i + 6][0..4], nativeEndian());
-            const next = i + 6 + @as(usize, @intCast(skip));
-            return @min(next, span_end);
-        }
-
-        const next = i + 2 + @as(usize, len_byte);
-        return @min(next, span_end);
-    }
-
-    if (tables.WhitespaceTable[source[i]]) {
-        while (i < span_end and tables.WhitespaceTable[source[i]]) : (i += 1) {}
-        return i;
-    }
-
-    return i;
-}
-
 fn patchGap(source: []u8, span_end: usize, value_end: usize, raw_next_start: usize) void {
     // Any removed bytes are encoded as:
     // - single-space for tiny gaps
     // - short skip metadata: 0x00, len
     // - extended skip metadata: 0x00, 0xFF, u32 len
     // This keeps traversal O(n) without reparsing shifted tails.
+    std.debug.assert(span_end <= source.len);
+    std.debug.assert(value_end <= span_end);
     if (value_end + 1 >= span_end) return;
 
     const next_start = @min(raw_next_start, span_end);
@@ -442,22 +350,39 @@ fn patchGap(source: []u8, span_end: usize, value_end: usize, raw_next_start: usi
         source[gap_start] = 0;
         source[gap_start + 1] = 0xff;
         const skip: u32 = @intCast(gap_len - 6);
-        std.mem.writeInt(u32, source[gap_start + 2 .. gap_start + 6][0..4], skip, nativeEndian());
+        std.mem.writeInt(u32, source[gap_start + 2 .. gap_start + 6][0..4], skip, attr_scan.nativeEndian());
         return;
     }
 
     source[gap_start] = ' ';
 }
 
-fn nativeEndian() std.builtin.Endian {
-    return @import("builtin").cpu.arch.endian();
+test "materializeRawValue preserves traversal for following attrs" {
+    const testing = std.testing;
+
+    var buf = "a=\"x\" b=\"y\"".*;
+    const span_end = buf.len;
+    const eq_index = std.mem.indexOfScalar(u8, &buf, '=') orelse return error.MissingEq;
+    const raw = attr_scan.parseRawValue(&buf, span_end, eq_index);
+    const value = materializeRawValue(buf[0..], span_end, eq_index, raw);
+    try testing.expectEqualStrings("x", value);
+
+    const parsed = attr_scan.parseParsedValue(buf[0..], span_end, eq_index);
+    try testing.expectEqualStrings("x", parsed.value);
+
+    var i = parsed.next_start;
+    while (i < span_end and tables.WhitespaceTable[buf[i]]) : (i += 1) {}
+    const scanned = attr_scan.scanAttrNameOrSkip(&buf, span_end, i);
+    const name = scanned.name orelse return error.MissingAttr;
+    i = scanned.next_start;
+    try testing.expectEqualStrings("b", name);
 }
 
 fn firstUnresolvedMatch(selected_names: []const []const u8, out_values: []const ?[]const u8, name: []const u8) ?usize {
     var idx: usize = 0;
     while (idx < selected_names.len) : (idx += 1) {
         if (out_values[idx] != null) continue;
-        if (matchesLookupName(name, selected_names[idx], .generic, hashIgnoreCaseAscii(selected_names[idx]))) return idx;
+        if (matchesLookupName(name, selected_names[idx], .generic, tables.hashIgnoreCaseAscii(selected_names[idx]))) return idx;
     }
     return null;
 }
@@ -479,7 +404,7 @@ fn firstUnresolvedMatchByHash(
 }
 
 fn matchesLookupName(attr_name: []const u8, lookup: []const u8, lookup_kind: LookupKind, lookup_hash: u32) bool {
-    const attr_hash = if (lookup_kind == .generic) hashIgnoreCaseAscii(attr_name) else 0;
+    const attr_hash = if (lookup_kind == .generic) tables.hashIgnoreCaseAscii(attr_name) else 0;
     return matchesLookupNameHashed(attr_name, attr_hash, lookup, lookup_kind, lookup_hash);
 }
 
@@ -502,18 +427,6 @@ fn classifyLookupName(lookup: []const u8) LookupKind {
     if (isExactAsciiWord(lookup, "class")) return .class;
     if (isExactAsciiWord(lookup, "href")) return .href;
     return .generic;
-}
-
-fn hashIgnoreCaseAscii(bytes: []const u8) u32 {
-    var h: u32 = FnvOffset;
-    for (bytes) |c| {
-        h = hashIgnoreCaseAsciiUpdate(h, c);
-    }
-    return h;
-}
-
-inline fn hashIgnoreCaseAsciiUpdate(h: u32, c: u8) u32 {
-    return (h ^ @as(u32, tables.lower(c))) *% FnvPrime;
 }
 
 fn isExactAsciiWord(value: []const u8, comptime lower: []const u8) bool {

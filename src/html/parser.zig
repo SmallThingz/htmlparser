@@ -6,9 +6,14 @@ const common = @import("../common.zig");
 
 const InvalidIndex: u32 = common.InvalidIndex;
 const SvgTagKey: u64 = tags.first8Key("svg");
+const InitialParseStackCapacity: usize = 1024;
+
+// SAFETY: Parser builds in-place spans into `input`; indices are stored as `u32`.
+// We reject inputs larger than `u32::max` to prevent truncation.
 
 /// Parses mutable HTML bytes into `doc` using permissive, in-place tree construction.
 pub fn parseInto(comptime Doc: type, noalias doc: *Doc, input: []u8, comptime opts: anytype) !void {
+    if (input.len > std.math.maxInt(u32)) return error.InputTooLarge;
     var p = Parser(Doc, opts){
         .doc = doc,
         .input = input,
@@ -24,6 +29,7 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
         i: usize,
 
         const Self = @This();
+        const OpenElem = Doc.OpenElemType;
 
         fn parse(noalias self: *Self) !void {
             try self.reserveCapacities();
@@ -32,7 +38,7 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
                 .kind = .document,
                 .subtree_end = 0,
             });
-            try self.pushStack(0);
+            try self.pushStack(0, 0, 0);
 
             try self.parseLoop(comptime opts.drop_whitespace_text_nodes);
             self.finishOpenElements();
@@ -73,8 +79,8 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
 
         fn finishOpenElements(noalias self: *Self) void {
             while (self.doc.parse_stack.items.len > 1) {
-                const idx = self.doc.parse_stack.pop().?;
-                var node = &self.doc.nodes.items[idx];
+                const open = self.doc.parse_stack.pop().?;
+                var node = &self.doc.nodes.items[open.idx];
                 node.subtree_end = @intCast(self.doc.nodes.items.len - 1);
             }
             self.doc.nodes.items[0].subtree_end = @intCast(self.doc.nodes.items.len - 1);
@@ -86,18 +92,14 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
             const input_len = self.input.len;
 
             var estimated_nodes: usize = undefined;
-            var estimated_stack: usize = undefined;
-
             if (opts.drop_whitespace_text_nodes) {
                 estimated_nodes = @max(@as(usize, 32), (input_len / 32) + 32);
-                estimated_stack = @max(@as(usize, 16), (input_len / 512) + 16);
             } else {
                 estimated_nodes = @max(@as(usize, 16), (input_len / 16) + 8);
-                estimated_stack = @max(@as(usize, 8), (input_len / 256) + 8);
             }
 
             try self.doc.nodes.ensureTotalCapacity(alloc, estimated_nodes);
-            try self.doc.parse_stack.ensureTotalCapacity(alloc, estimated_stack);
+            try self.doc.parse_stack.ensureTotalCapacity(alloc, InitialParseStackCapacity);
         }
 
         inline fn parseTextKeepWhitespace(noalias self: *Self) !void {
@@ -106,7 +108,7 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
             if (self.i == start) return;
 
             const parent_idx = self.currentParent();
-            const node_idx = try self.appendNode(.text, parent_idx);
+            const node_idx = try self.appendTextNode(parent_idx);
             var node = &self.doc.nodes.items[node_idx];
             node.name_or_text = .{ .start = @intCast(start), .end = @intCast(self.i) };
             node.subtree_end = node_idx;
@@ -114,19 +116,13 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
 
         inline fn parseTextDropWhitespace(noalias self: *Self) !void {
             const start = self.i;
-            self.i = scanner.findByte(self.input, self.i, '<') orelse self.input.len;
+            const scanned = scanner.scanTextRun(self.input, self.i);
+            self.i = scanned.lt_index;
             if (self.i == start) return;
-
-            const text = self.input[start..self.i];
-            if (tables.WhitespaceTable[text[0]] and
-                tables.WhitespaceTable[text[text.len - 1]] and
-                isAllAsciiWhitespace(text))
-            {
-                return;
-            }
+            if (!scanned.has_non_whitespace) return;
 
             const parent_idx = self.currentParent();
-            const node_idx = try self.appendNode(.text, parent_idx);
+            const node_idx = try self.appendTextNode(parent_idx);
             var node = &self.doc.nodes.items[node_idx];
             node.name_or_text = .{ .start = @intCast(start), .end = @intCast(self.i) };
             node.subtree_end = node_idx;
@@ -196,7 +192,7 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
             if (isSvgTag(tag_name, tag_name_key)) {
                 const svg_self_close = scanner.isExplicitSelfClosingTag(self.input, attr_bytes_start, tag_gt_index);
                 const parent_idx = self.currentParent();
-                const node_idx = try self.appendNode(.element, parent_idx);
+                const node_idx = try self.appendElementNode(parent_idx);
                 var node = &self.doc.nodes.items[node_idx];
                 node.name_or_text = .{ .start = @intCast(name_start), .end = @intCast(name_end) };
                 node.attr_end = @intCast(attr_bytes_end);
@@ -211,7 +207,7 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
                     while (content_end > content_start and self.input[content_end - 1] != '<') : (content_end -= 1) {}
 
                     if (content_end > content_start) {
-                        const text_idx = try self.appendNode(.text, node_idx);
+                        const text_idx = try self.appendTextNode(node_idx);
                         var text_node = &self.doc.nodes.items[text_idx];
                         text_node.name_or_text = .{ .start = @intCast(content_start), .end = @intCast(content_end - 1) };
                         text_node.subtree_end = text_idx;
@@ -223,7 +219,7 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
                     return;
                 } else {
                     if (self.input.len > content_start) {
-                        const text_idx = try self.appendNode(.text, node_idx);
+                        const text_idx = try self.appendTextNode(node_idx);
                         var text_node = &self.doc.nodes.items[text_idx];
                         text_node.name_or_text = .{ .start = @intCast(content_start), .end = @intCast(self.input.len) };
                         text_node.subtree_end = text_idx;
@@ -236,7 +232,7 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
             }
 
             const parent_idx = self.currentParent();
-            const node_idx = try self.appendNode(.element, parent_idx);
+            const node_idx = try self.appendElementNode(parent_idx);
             var node = &self.doc.nodes.items[node_idx];
             node.name_or_text = .{ .start = @intCast(name_start), .end = @intCast(name_end) };
             node.attr_end = @intCast(attr_bytes_end);
@@ -244,7 +240,7 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
             if (!self_close and tags.isPlainTextTagWithKey(tag_name, tag_name_key)) {
                 const content_start = self.i;
                 if (self.input.len > content_start) {
-                    const text_idx = try self.appendNode(.text, node_idx);
+                    const text_idx = try self.appendTextNode(node_idx);
                     var text_node = &self.doc.nodes.items[text_idx];
                     text_node.name_or_text = .{ .start = @intCast(content_start), .end = @intCast(self.input.len) };
                     text_node.subtree_end = text_idx;
@@ -260,7 +256,7 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
                 const content_start = self.i;
                 if (self.findRawTextClose(tag_name, self.i)) |close| {
                     if (close.content_end > content_start) {
-                        const text_idx = try self.appendNode(.text, node_idx);
+                        const text_idx = try self.appendTextNode(node_idx);
                         var text_node = &self.doc.nodes.items[text_idx];
                         text_node.name_or_text = .{ .start = @intCast(content_start), .end = @intCast(close.content_end) };
                         text_node.subtree_end = text_idx;
@@ -273,7 +269,7 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
                 } else {
                     @branchHint(.cold);
                     if (self.input.len > content_start) {
-                        const text_idx = try self.appendNode(.text, node_idx);
+                        const text_idx = try self.appendTextNode(node_idx);
                         var text_node = &self.doc.nodes.items[text_idx];
                         text_node.name_or_text = .{ .start = @intCast(content_start), .end = @intCast(self.input.len) };
                         text_node.subtree_end = text_idx;
@@ -290,7 +286,7 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
                 return;
             }
 
-            try self.pushStack(node_idx);
+            try self.pushStack(node_idx, tag_name_key, @intCast(tag_name.len));
         }
 
         fn parseClosingTag(noalias self: *Self) void {
@@ -314,8 +310,12 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
             const name_end = self.i;
             const close_name = self.input[name_start..name_end];
 
-            self.i = scanner.findByte(self.input, self.i, '>') orelse self.input.len;
-            if (self.i < self.input.len) self.i += 1;
+            if (self.i < self.input.len and self.input[self.i] == '>') {
+                self.i += 1;
+            } else {
+                self.i = scanner.findByte(self.input, self.i, '>') orelse self.input.len;
+                if (self.i < self.input.len) self.i += 1;
+            }
 
             if (close_name.len == 0) {
                 @branchHint(.cold);
@@ -323,18 +323,12 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
             }
 
             if (self.doc.parse_stack.items.len > 1) {
-                const top_idx = self.doc.parse_stack.items[self.doc.parse_stack.items.len - 1];
-                const top = &self.doc.nodes.items[top_idx];
-                if (top.name_or_text.len() == close_name.len) {
-                    const top_name = top.name_or_text.slice(self.input);
-                    const top_key = tags.first8Key(top_name);
-                    const matches_top = tags.equalByLenAndKeyIgnoreCase(top_name, top_key, close_name, close_key);
-                    if (matches_top) {
-                        _ = self.doc.parse_stack.pop();
-                        var node = &self.doc.nodes.items[top_idx];
-                        node.subtree_end = @intCast(self.doc.nodes.items.len - 1);
-                        return;
-                    }
+                const top = self.doc.parse_stack.items[self.doc.parse_stack.items.len - 1];
+                if (self.openElemMatchesClose(top, close_name, close_key)) {
+                    _ = self.doc.parse_stack.pop();
+                    var node = &self.doc.nodes.items[top.idx];
+                    node.subtree_end = @intCast(self.doc.nodes.items.len - 1);
+                    return;
                 }
             }
 
@@ -342,21 +336,16 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
             var s = self.doc.parse_stack.items.len;
             while (s > 1) {
                 s -= 1;
-                const idx = self.doc.parse_stack.items[s];
-                const n = &self.doc.nodes.items[idx];
-                if (n.name_or_text.len() != close_name.len) continue;
-                const open_name = n.name_or_text.slice(self.input);
-                const open_key = tags.first8Key(open_name);
-                const matches = tags.equalByLenAndKeyIgnoreCase(open_name, open_key, close_name, close_key);
-                if (!matches) continue;
+                const open = self.doc.parse_stack.items[s];
+                if (!self.openElemMatchesClose(open, close_name, close_key)) continue;
                 found = s;
                 break;
             }
 
             if (found) |pos| {
                 while (self.doc.parse_stack.items.len > pos) {
-                    const idx = self.doc.parse_stack.pop().?;
-                    var node = &self.doc.nodes.items[idx];
+                    const open = self.doc.parse_stack.pop().?;
+                    var node = &self.doc.nodes.items[open.idx];
                     node.subtree_end = @intCast(self.doc.nodes.items.len - 1);
                 }
             } else {
@@ -366,32 +355,38 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
 
         inline fn applyImplicitClosures(noalias self: *Self, new_tag: []const u8, new_tag_key: u64) void {
             while (self.doc.parse_stack.items.len > 1) {
-                const top_idx = self.doc.parse_stack.items[self.doc.parse_stack.items.len - 1];
-                const top = &self.doc.nodes.items[top_idx];
-                const top_name = top.name_or_text.slice(self.input);
-                const top_key = tags.first8Key(top_name);
-                if (!tags.isImplicitCloseSourceWithKey(top_name, top_key)) break;
-                if (!tags.shouldImplicitlyCloseWithKeys(top_name, top_key, new_tag, new_tag_key)) break;
+                const top = self.doc.parse_stack.items[self.doc.parse_stack.items.len - 1];
+                if (!tags.isImplicitCloseSourceWithLenAndKey(top.tag_len, top.tag_key)) break;
+                if (!tags.shouldImplicitlyCloseWithLenAndKey(top.tag_len, top.tag_key, new_tag, new_tag_key)) break;
 
                 _ = self.doc.parse_stack.pop();
-                var n = &self.doc.nodes.items[top_idx];
+                var n = &self.doc.nodes.items[top.idx];
                 n.subtree_end = @intCast(self.doc.nodes.items.len - 1);
             }
         }
 
-        fn appendNode(noalias self: *Self, kind: anytype, parent_idx: u32) !u32 {
+        fn appendTextNode(noalias self: *Self, parent_idx: u32) !u32 {
             const idx: u32 = @intCast(self.doc.nodes.items.len);
-            const build_links = parent_idx != InvalidIndex and kind == .element;
-
             const node: @TypeOf(self.doc.nodes.items[0]) = .{
-                .kind = kind,
+                .kind = .text,
+                .parent = parent_idx,
+                .subtree_end = idx,
+            };
+            _ = try self.pushNode(node);
+            return idx;
+        }
+
+        fn appendElementNode(noalias self: *Self, parent_idx: u32) !u32 {
+            const idx: u32 = @intCast(self.doc.nodes.items.len);
+            const node: @TypeOf(self.doc.nodes.items[0]) = .{
+                .kind = .element,
                 .parent = parent_idx,
                 .subtree_end = idx,
             };
 
             _ = try self.pushNode(node);
 
-            if (build_links) {
+            if (parent_idx != InvalidIndex) {
                 var p = &self.doc.nodes.items[parent_idx];
                 if (p.last_child == InvalidIndex) {
                     p.last_child = idx;
@@ -412,13 +407,24 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
             return @intCast(len);
         }
 
-        fn pushStack(noalias self: *Self, idx: u32) !void {
-            try appendAlloc(u32, &self.doc.parse_stack, self.doc.allocator, idx);
+        fn pushStack(noalias self: *Self, idx: u32, tag_key: u64, tag_len: u16) !void {
+            try appendAlloc(OpenElem, &self.doc.parse_stack, self.doc.allocator, .{
+                .idx = idx,
+                .tag_key = tag_key,
+                .tag_len = tag_len,
+            });
         }
 
         inline fn currentParent(noalias self: *Self) u32 {
             if (self.doc.parse_stack.items.len == 0) return InvalidIndex;
-            return self.doc.parse_stack.items[self.doc.parse_stack.items.len - 1];
+            return self.doc.parse_stack.items[self.doc.parse_stack.items.len - 1].idx;
+        }
+
+        inline fn openElemMatchesClose(noalias self: *Self, open: OpenElem, close_name: []const u8, close_key: u64) bool {
+            if (open.tag_len != close_name.len or open.tag_key != close_key) return false;
+            if (close_name.len <= 8) return true;
+            const open_name = self.doc.nodes.items[open.idx].name_or_text.slice(self.input);
+            return tables.eqlIgnoreCaseAscii(open_name[8..], close_name[8..]);
         }
 
         fn skipComment(noalias self: *Self) void {
@@ -453,20 +459,8 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
 
         fn skipPi(noalias self: *Self) void {
             self.i += 2;
-            var j = self.i;
-            while (j + 1 < self.input.len) {
-                const q = scanner.findByte(self.input, j, '?') orelse {
-                    @branchHint(.cold);
-                    self.i = self.input.len;
-                    return;
-                };
-                if (q + 1 < self.input.len and self.input[q + 1] == '>') {
-                    self.i = q + 2;
-                    return;
-                }
-                j = q + 1;
-            }
-            self.i = self.input.len;
+            self.i = scanner.findByte(self.input, self.i, '>') orelse self.input.len;
+            if (self.i < self.input.len) self.i += 1;
         }
 
         inline fn skipWs(noalias self: *Self) void {
@@ -481,6 +475,7 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
             var j = scanner.findByte(self.input, start, '<') orelse return null;
             const tag_len = tag_name.len;
             if (tag_len == 0) return null;
+            const tag_key = tags.first8Key(tag_name);
             const first = tables.lower(tag_name[0]);
             while (j + 3 < self.input.len) {
                 if (self.input[j + 1] != '/') {
@@ -494,17 +489,22 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
 
                 var k = j + 2;
                 const name_start = k;
+                var close_key: u64 = 0;
+                var close_key_len: u8 = 0;
                 while (k < self.input.len and tables.TagNameCharTable[self.input[k]]) : (k += 1) {}
+                {
+                    var p = name_start;
+                    while (p < k and close_key_len < 8) : (p += 1) {
+                        close_key |= @as(u64, tables.lower(self.input[p])) << @as(u6, @intCast(close_key_len * 8));
+                        close_key_len += 1;
+                    }
+                }
                 if (k == name_start) {
                     j = scanner.findByte(self.input, j + 1, '<') orelse return null;
                     continue;
                 }
 
-                if (k - name_start != tag_len) {
-                    j = scanner.findByte(self.input, j + 1, '<') orelse return null;
-                    continue;
-                }
-                if (!tables.eqlIgnoreCaseAscii(self.input[name_start..k], tag_name)) {
+                if (k - name_start != tag_len or close_key != tag_key) {
                     j = scanner.findByte(self.input, j + 1, '<') orelse return null;
                     continue;
                 }
@@ -521,13 +521,6 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
                 };
             }
             return null;
-        }
-
-        inline fn isAllAsciiWhitespace(bytes: []const u8) bool {
-            for (bytes) |c| {
-                if (!tables.WhitespaceTable[c]) return false;
-            }
-            return true;
         }
     };
 }

@@ -1,6 +1,9 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const tables = @import("tables.zig");
+
+// SAFETY: Scanners operate on byte slices and rely on caller-provided bounds.
+// All indexing stays within `hay.len` and is guarded by bounds checks or
+// debug asserts where assumptions are made.
 
 /// Result of scanning to a tag end while respecting quoted attributes.
 pub const TagEnd = struct {
@@ -8,19 +11,72 @@ pub const TagEnd = struct {
     attr_end: usize,
 
     /// Formats this tag end summary for human-readable output.
-    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.print("TagEnd{{gt_index={}, attr_end={}}}", .{ self.gt_index, self.attr_end });
     }
 };
 
+/// Result of scanning a text run up to the next `<`.
+pub const TextRun = struct {
+    lt_index: usize,
+    has_non_whitespace: bool,
+};
+
 /// Finds `needle` byte in `hay` from `start`, using SIMD where available.
-pub inline fn findByte(hay: []const u8, start: usize, needle: u8) ?usize {
-    // return findByteDispatch(hay, start, needle);
-    return @call(.always_inline, indexOfScalarPos, .{ hay, start, needle });
+pub fn findByte(hay: []const u8, start: usize, needle: u8) ?usize {
+    return std.mem.indexOfScalarPos(u8, hay, start, needle);
+}
+
+/// Scans from `start` to the next `<`, tracking whether the run contains any non-whitespace bytes.
+pub fn scanTextRun(hay: []const u8, start: usize) TextRun {
+    if (start >= hay.len) return .{ .lt_index = hay.len, .has_non_whitespace = false };
+
+    var i = start;
+    var has_non_whitespace = false;
+
+    if (!@inComptime()) {
+        if (std.simd.suggestVectorLength(u8)) |block_len| {
+            const Block = @Vector(block_len, u8);
+            const lt_mask: Block = @splat('<');
+            const sp_mask: Block = @splat(' ');
+            const nl_mask: Block = @splat('\n');
+            const cr_mask: Block = @splat('\r');
+            const tab_mask: Block = @splat('\t');
+            const ff_mask: Block = @splat('\x0c');
+
+            while (i + block_len <= hay.len) : (i += block_len) {
+                const block: Block = hay[i..][0..block_len].*;
+                const lt_hits = block == lt_mask;
+                if (@reduce(.Or, lt_hits)) {
+                    const first_lt = std.simd.firstTrue(lt_hits).?;
+                    var j: usize = 0;
+                    while (j < first_lt) : (j += 1) {
+                        if (!tables.WhitespaceTable[hay[i + j]]) {
+                            return .{ .lt_index = i + first_lt, .has_non_whitespace = true };
+                        }
+                    }
+                    return .{ .lt_index = i + first_lt, .has_non_whitespace = has_non_whitespace };
+                }
+
+                const ws_hits = (block == sp_mask) |
+                    (block == nl_mask) |
+                    (block == cr_mask) |
+                    (block == tab_mask) |
+                    (block == ff_mask);
+                if (!@reduce(.And, ws_hits)) has_non_whitespace = true;
+            }
+        }
+    }
+
+    while (i < hay.len and hay[i] != '<') : (i += 1) {
+        if (!tables.WhitespaceTable[hay[i]]) has_non_whitespace = true;
+    }
+    return .{ .lt_index = i, .has_non_whitespace = has_non_whitespace };
 }
 
 /// Scans from `start` to next `>` while skipping quoted `>` inside attributes.
 pub fn findTagEndRespectQuotes(hay: []const u8, _start: usize) ?TagEnd {
+    std.debug.assert(_start <= hay.len);
     var start = _start;
     var end = findAny3Dispatch(hay, start) orelse {
         @branchHint(.cold);
@@ -130,115 +186,26 @@ inline fn isSvgTagName(name: []const u8) bool {
 }
 
 inline fn findAny3Dispatch(hay: []const u8, start: usize) ?usize {
-    if (comptime builtin.cpu.arch == .x86_64 and std.Target.x86.featureSetHas(builtin.cpu.features, .avx2)) {
-        return findAny3Vec(32, hay, start);
-    }
-    if (comptime builtin.cpu.arch == .x86_64 and std.Target.x86.featureSetHas(builtin.cpu.features, .sse2)) {
-        return findAny3Vec(16, hay, start);
-    }
-    if (comptime builtin.cpu.arch == .aarch64) {
-        return findAny3Vec(16, hay, start);
-    }
-    return findAny3Scalar(hay, start);
-}
-
-inline fn findAny3Scalar(hay: []const u8, start: usize) ?usize {
-    const a = '>';
-    const b = '"';
-    const c = '\'';
-    for (hay[start..], start..) |ch, i| {
-        if (ch == a or ch == b or ch == c) return i;
-    }
-    return null;
-}
-
-inline fn findAny3Vec(comptime lanes: comptime_int, hay: []const u8, start: usize) ?usize {
-    const a = '>';
-    const b = '"';
-    const c = '\'';
-    const Vec = @Vector(lanes, u8);
-    const a_vec: Vec = @splat(a);
-    const b_vec: Vec = @splat(b);
-    const c_vec: Vec = @splat(c);
-
-    var i = start;
-    while (i + lanes <= hay.len) : (i += lanes) {
-        const chunk: [lanes]u8 = hay[i..][0..lanes].*;
-        const vec: Vec = chunk;
-        const mask = (vec == a_vec) | (vec == b_vec) | (vec == c_vec);
-        if (@reduce(.Or, mask)) {
-            for (hay[i..], i..) |ch, j| {
-                if (ch == a or ch == b or ch == c) return j;
-            }
-            unreachable;
-        } else {
-            @branchHint(.likely);
-        }
-    }
-    return findAny3Scalar(hay, i);
-}
-
-inline fn indexOfScalarPos(slice: []const u8, start_index: usize, value: u8) ?usize {
-    if (start_index >= slice.len) return null;
-
-    var i: usize = start_index;
-    if (!@inComptime()) {
-        if (std.simd.suggestVectorLength(u8)) |block_len| {
-            // For Intel Nehalem (2009) and AMD Bulldozer (2012) or later, unaligned loads on aligned data result
-            // in the same execution as aligned loads. We ignore older arch's here and don't bother pre-aligning.
-            //
-            // Use `std.simd.suggestVectorLength(T)` to get the same alignment as used in this function
-            // however this usually isn't necessary unless your arch has a performance penalty due to this.
-            //
-            // This may differ for other arch's. Arm for example costs a cycle when loading across a cache
-            // line so explicit alignment prologues may be worth exploration.
-
-            // Unrolling here is ~10% improvement. We can then do one bounds check every 2 blocks
-            // instead of one which adds up.
-            const Block = @Vector(block_len, u8);
-            if (i + 2 * block_len < slice.len) {
-                const mask: Block = @splat(value);
-                while (true) {
-                    inline for (0..2) |_| {
-                        const block: Block = slice[i..][0..block_len].*;
-                        const matches = block == mask;
-                        if (@reduce(.Or, matches)) {
-                            return i + std.simd.firstTrue(matches).?;
-                        }
-                        i += block_len;
-                    }
-                    if (i + 2 * block_len >= slice.len) break;
-                }
-            }
-
-            // {block_len, block_len / 2} check
-            inline for (0..2) |j| {
-                const block_x_len = block_len / (1 << j);
-                comptime if (block_x_len < 4) break;
-
-                const BlockX = @Vector(block_x_len, u8);
-                if (i + block_x_len < slice.len) {
-                    const mask: BlockX = @splat(value);
-                    const block: BlockX = slice[i..][0..block_x_len].*;
-                    const matches = block == mask;
-                    if (@reduce(.Or, matches)) {
-                        return i + std.simd.firstTrue(matches).?;
-                    }
-                    i += block_x_len;
-                }
-            }
-        }
-    }
-
-    for (slice[i..], i..) |c, j| {
-        if (c == value) return j;
-    }
-    return null;
+    return @call(.always_inline, std.mem.indexOfAnyPos, .{ u8, hay, start, ">'\"" });
 }
 
 test "findByte helper matches scalar behavior" {
     const s = "abc<?d<!--x--><q";
     try std.testing.expectEqual(@as(?usize, 3), findByte(s, 0, '<'));
+}
+
+test "scanTextRun tracks next tag and whitespace-only runs" {
+    const a = scanTextRun(" \n\t<em>", 0);
+    try std.testing.expectEqual(@as(usize, 3), a.lt_index);
+    try std.testing.expect(!a.has_non_whitespace);
+
+    const b = scanTextRun("  hi<em>", 0);
+    try std.testing.expectEqual(@as(usize, 4), b.lt_index);
+    try std.testing.expect(b.has_non_whitespace);
+
+    const c = scanTextRun("plain text", 0);
+    try std.testing.expectEqual(@as(usize, 10), c.lt_index);
+    try std.testing.expect(c.has_non_whitespace);
 }
 
 test "findTagEndRespectQuotes handles quoted >" {

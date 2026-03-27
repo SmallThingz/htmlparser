@@ -3,7 +3,7 @@ const html = @import("htmlparser");
 const default_options: html.ParseOptions = .{};
 const Document = default_options.GetDocument();
 
-fn run() !void {
+pub fn run() !void {
     var doc = Document.init(std.testing.allocator);
     defer doc.deinit();
 
@@ -20,7 +20,7 @@ fn run() !void {
     defer arena.deinit();
 
     const sel = try html.Selector.compileRuntime(arena.allocator(), "a[href^=https][class~=button]");
-    const first = doc.queryOneCached(&sel) orelse return error.TestUnexpectedResult;
+    const first = doc.queryOneCached(sel) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("a1", first.getAttributeValue("id").?);
 }
 

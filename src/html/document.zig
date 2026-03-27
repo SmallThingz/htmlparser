@@ -12,6 +12,10 @@ const node_api = @import("node.zig");
 const tags = @import("tags.zig");
 const common = @import("../common.zig");
 
+// SAFETY: Document owns `source` bytes for the life of nodes/iterators.
+// Node spans and indices are validated on parse; helpers guard against
+// InvalidIndex and out-of-range indexes.
+
 /// Sentinel used for missing node indexes and invalid spans.
 pub const InvalidIndex: u32 = common.InvalidIndex;
 const QueryAccelMinBudgetBytes: usize = 4096;
@@ -20,6 +24,17 @@ const QueryAccelBudgetDivisor: usize = 20; // 5%
 const IndexSpan = struct {
     start: u32 = 0,
     len: u32 = 0,
+};
+
+const QueryAccelIdLookup = union(enum) {
+    unavailable,
+    miss,
+    hit: u32,
+};
+
+const QueryAccelTagLookup = union(enum) {
+    unavailable,
+    hit: []const u32,
 };
 
 const TagIndexEntry = struct {
@@ -35,7 +50,7 @@ pub const NodeType = enum(u3) {
     text,
 
     /// Formats this node type for human-readable output.
-    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.writeAll(@tagName(self));
     }
 };
@@ -48,7 +63,7 @@ pub const ParseOptions = struct {
     drop_whitespace_text_nodes: bool = true,
 
     /// Formats parse options for human-readable output.
-    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.print("ParseOptions{{drop_whitespace_text_nodes={}}}", .{self.drop_whitespace_text_nodes});
     }
 
@@ -72,12 +87,22 @@ pub const ParseOptions = struct {
         };
     }
 
+    /// Returns the parser's open-element stack entry type.
+    pub fn GetOpenElem(_: @This()) type {
+        return struct {
+            tag_key: u64 = 0,
+            idx: u32,
+            tag_len: u16 = 0,
+        };
+    }
+
     /// Returns the lightweight node wrapper type bound to this option set.
     pub fn GetNode(options: @This()) type {
         return struct {
             //! Public node wrapper that carries document pointer + node index.
             const DocType = options.GetDocument();
             const ChildrenIterType = options.ChildrenIter();
+            const DebugQueryResultType = options.QueryDebugResult();
             const QueryIterType = options.QueryIter();
 
             doc: *DocType,
@@ -104,7 +129,7 @@ pub const ParseOptions = struct {
             }
 
             /// Default formatter uses HTML serialization for this node.
-            pub fn format(self: *const @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+            pub fn format(self: *const @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
                 return self.writeHtml(writer);
             }
 
@@ -158,7 +183,7 @@ pub const ParseOptions = struct {
                 return node_api.parentNode(self);
             }
 
-            /// Returns direct-child index iterator.
+            /// Returns direct-child node iterator.
             pub fn children(self: @This()) ChildrenIterType {
                 return node_api.children(self);
             }
@@ -166,18 +191,18 @@ pub const ParseOptions = struct {
             /// Compiles selector at comptime and returns first descendant match.
             pub fn queryOne(self: @This(), comptime selector: []const u8) ?@This() {
                 const sel = comptime ast.Selector.compile(selector);
-                return self.queryOneCached(&sel);
+                return self.queryOneCached(sel);
             }
 
             /// Returns first descendant match for already compiled selector.
-            pub fn queryOneCached(self: @This(), sel: *const ast.Selector) ?@This() {
-                return self.doc.queryOneCachedFrom(sel.*, self.index);
+            pub fn queryOneCached(self: @This(), sel: ast.Selector) ?@This() {
+                return self.doc.queryOneCachedFrom(sel, self.index);
             }
 
-            /// Debug variant of `queryOne` that fills mismatch diagnostics report.
-            pub fn queryOneDebug(self: @This(), comptime selector: []const u8, report: *selector_debug.QueryDebugReport) ?@This() {
+            /// Debug variant of `queryOne` that returns mismatch diagnostics.
+            pub fn queryOneDebug(self: @This(), comptime selector: []const u8) DebugQueryResultType {
                 const sel = comptime ast.Selector.compile(selector);
-                return self.doc.queryOneCachedDebugFrom(sel, self.index, report);
+                return self.doc.queryOneCachedDebugFrom(sel, self.index);
             }
 
             /// Parses selector at runtime and returns first descendant match.
@@ -185,21 +210,21 @@ pub const ParseOptions = struct {
                 return self.doc.queryOneRuntimeFrom(selector, self.index);
             }
 
-            /// Runtime debug query returning first match and mismatch diagnostics.
-            pub fn queryOneRuntimeDebug(self: @This(), selector: []const u8, report: *selector_debug.QueryDebugReport) runtime_selector.Error!?@This() {
-                return self.doc.queryOneRuntimeDebugFrom(selector, self.index, report);
+            /// Runtime debug query returning first match, diagnostics, and parse error if any.
+            pub fn queryOneRuntimeDebug(self: @This(), selector: []const u8) DebugQueryResultType {
+                return self.doc.queryOneRuntimeDebugFrom(selector, self.index);
             }
 
             /// Compiles selector at comptime and returns lazy descendant iterator.
             pub fn queryAll(self: @This(), comptime selector: []const u8) QueryIterType {
                 const sel = comptime ast.Selector.compile(selector);
-                return self.queryAllCached(&sel);
+                return self.queryAllCached(sel);
             }
 
             /// Returns lazy descendant iterator for already compiled selector.
-            pub fn queryAllCached(self: @This(), sel: *const ast.Selector) QueryIterType {
-                self.doc.ensureQueryPrereqs(sel.*);
-                return .{ .doc = self.doc, .selector = sel.*, .scope_root = self.index, .next_index = self.index + 1 };
+            pub fn queryAllCached(self: @This(), sel: ast.Selector) QueryIterType {
+                self.doc.ensureQueryPrereqs(sel);
+                return .{ .doc = self.doc, .selector = sel, .scope_root = self.index, .next_index = self.index + 1 };
             }
 
             /// Parses selector at runtime and returns lazy descendant iterator.
@@ -248,7 +273,7 @@ pub const ParseOptions = struct {
             }
 
             /// Formats iterator state for human-readable output.
-            pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+            pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
                 try writer.print("QueryIter{{scope_root={}, next_index={}, runtime_generation={}}}", .{
                     self.scope_root,
                     self.next_index,
@@ -258,32 +283,54 @@ pub const ParseOptions = struct {
         };
     }
 
+    /// Returns the structured result type for debug query helpers.
+    pub fn QueryDebugResult(options: @This()) type {
+        return struct {
+            node: ?options.GetNode() = null,
+            report: selector_debug.QueryDebugReport = .{},
+            err: ?runtime_selector.Error = null,
+        };
+    }
+
     /// Returns direct-child iterator type for this option set.
     pub fn ChildrenIter(options: @This()) type {
         return struct {
-            //! Iterator over direct child node indexes for a parent node.
+            //! Iterator over direct child nodes for a parent node.
             const DocType = options.GetDocument();
+            const NodeTypeWrapper = options.GetNode();
 
             doc: *const DocType,
             next_idx: u32 = InvalidIndex,
 
-            /// Returns next child node index or `null` when exhausted.
-            pub fn next(noalias self: *@This()) ?u32 {
+            /// Returns next wrapped child node or `null` when exhausted.
+            pub fn next(noalias self: *@This()) ?NodeTypeWrapper {
                 if (self.next_idx == InvalidIndex) return null;
                 const idx = self.next_idx;
                 self.next_idx = self.doc.nextElementSiblingIndex(idx);
-                return idx;
+                return self.doc.nodeAt(idx);
             }
 
-            /// Appends all remaining child indexes into `out`.
-            pub fn collect(noalias self: *@This(), allocator: std.mem.Allocator, out: *std.ArrayListUnmanaged(u32)) !void {
-                while (self.next()) |idx| {
-                    try out.append(allocator, idx);
+            /// Allocates and returns all remaining wrapped child nodes.
+            pub fn collect(noalias self: *@This(), allocator: std.mem.Allocator) ![]NodeTypeWrapper {
+                var count: usize = 0;
+                var idx = self.next_idx;
+                while (idx != InvalidIndex) : (idx = self.doc.nextElementSiblingIndex(idx)) {
+                    count += 1;
                 }
+
+                const out = try allocator.alloc(NodeTypeWrapper, count);
+                idx = self.next_idx;
+                var out_idx: usize = 0;
+                while (idx != InvalidIndex) : (idx = self.doc.nextElementSiblingIndex(idx)) {
+                    out[out_idx] = self.doc.nodeAt(idx).?;
+                    out_idx += 1;
+                }
+                self.next_idx = InvalidIndex;
+                return out;
             }
 
             /// Formats iterator state for human-readable output.
-            pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+            pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
                 try writer.print("ChildrenIter{{next_idx={}}}", .{self.next_idx});
             }
         };
@@ -294,7 +341,9 @@ pub const ParseOptions = struct {
         return struct {
             //! Parsed document owner and query entrypoint container.
             const DocSelf = @This();
+            const DebugQueryResultType = options.QueryDebugResult();
             const RawNodeType = options.GetNodeRaw();
+            pub const OpenElemType = options.GetOpenElem();
             const ChildrenIterType = options.ChildrenIter();
             const NodeTypeWrapper = options.GetNode();
             const QueryIterType = options.QueryIter();
@@ -302,8 +351,8 @@ pub const ParseOptions = struct {
             allocator: std.mem.Allocator,
             source: []u8 = &[_]u8{},
 
-            nodes: std.ArrayListUnmanaged(RawNodeType) = .{},
-            parse_stack: std.ArrayListUnmanaged(u32) = .{},
+            nodes: std.ArrayListUnmanaged(RawNodeType) = .empty,
+            parse_stack: std.ArrayListUnmanaged(OpenElemType) = .empty,
 
             query_one_arena: ?std.heap.ArenaAllocator = null,
             query_all_arena: ?std.heap.ArenaAllocator = null,
@@ -316,8 +365,8 @@ pub const ParseOptions = struct {
             query_accel_id_disabled: bool = false,
             query_accel_tag_disabled: bool = false,
             query_accel_id_map: std.AutoHashMapUnmanaged(u64, u32) = .{},
-            query_accel_tag_entries: std.ArrayListUnmanaged(TagIndexEntry) = .{},
-            query_accel_tag_nodes: std.ArrayListUnmanaged(u32) = .{},
+            query_accel_tag_entries: std.ArrayListUnmanaged(TagIndexEntry) = .empty,
+            query_accel_tag_nodes: std.ArrayListUnmanaged(u32) = .empty,
 
             /// Initializes an empty document using `allocator` for internal storage.
             pub fn init(allocator: std.mem.Allocator) DocSelf {
@@ -339,10 +388,12 @@ pub const ParseOptions = struct {
 
             /// Clears parsed state while retaining reusable capacities.
             pub fn clear(noalias self: *DocSelf) void {
+                self.source = &[_]u8{};
                 self.nodes.clearRetainingCapacity();
                 self.parse_stack.clearRetainingCapacity();
                 if (self.query_one_arena) |*arena| _ = arena.reset(.retain_capacity);
                 if (self.query_all_arena) |*arena| _ = arena.reset(.retain_capacity);
+                self.query_accel_budget_bytes = 0;
                 self.resetQueryAccel();
                 self.query_all_generation +%= 1;
                 if (self.query_all_generation == 0) self.query_all_generation = 1;
@@ -359,18 +410,18 @@ pub const ParseOptions = struct {
             /// Returns first matching element for comptime selector.
             pub fn queryOne(self: *const DocSelf, comptime selector: []const u8) ?NodeTypeWrapper {
                 const sel = comptime ast.Selector.compile(selector);
-                return self.queryOneCached(&sel);
+                return self.queryOneCached(sel);
             }
 
             /// Returns first matching element for precompiled selector.
-            pub fn queryOneCached(self: *const DocSelf, sel: *const ast.Selector) ?NodeTypeWrapper {
-                return self.queryOneCachedFrom(sel.*, InvalidIndex);
+            pub fn queryOneCached(self: *const DocSelf, sel: ast.Selector) ?NodeTypeWrapper {
+                return self.queryOneCachedFrom(sel, InvalidIndex);
             }
 
             /// Debug variant of `queryOne` that records mismatch details.
-            pub fn queryOneDebug(self: *const DocSelf, comptime selector: []const u8, report: *selector_debug.QueryDebugReport) ?NodeTypeWrapper {
+            pub fn queryOneDebug(self: *const DocSelf, comptime selector: []const u8) DebugQueryResultType {
                 const sel = comptime ast.Selector.compile(selector);
-                return self.queryOneCachedDebugFrom(sel, InvalidIndex, report);
+                return self.queryOneCachedDebugFrom(sel, InvalidIndex);
             }
 
             /// Parses selector at runtime and returns first match.
@@ -378,9 +429,9 @@ pub const ParseOptions = struct {
                 return self.queryOneRuntimeFrom(selector, InvalidIndex);
             }
 
-            /// Runtime debug query returning first match and diagnostics report.
-            pub fn queryOneRuntimeDebug(self: *const DocSelf, selector: []const u8, report: *selector_debug.QueryDebugReport) runtime_selector.Error!?NodeTypeWrapper {
-                return self.queryOneRuntimeDebugFrom(selector, InvalidIndex, report);
+            /// Runtime debug query returning first match, diagnostics report, and parse error if any.
+            pub fn queryOneRuntimeDebug(self: *const DocSelf, selector: []const u8) DebugQueryResultType {
+                return self.queryOneRuntimeDebugFrom(selector, InvalidIndex);
             }
 
             fn queryOneRuntimeFrom(self: *const DocSelf, selector: []const u8, scope_root: u32) runtime_selector.Error!?NodeTypeWrapper {
@@ -391,16 +442,20 @@ pub const ParseOptions = struct {
                 return self.queryOneCachedFrom(sel, scope_root);
             }
 
-            fn queryOneRuntimeDebugFrom(self: *const DocSelf, selector: []const u8, scope_root: u32, report: *selector_debug.QueryDebugReport) runtime_selector.Error!?NodeTypeWrapper {
+            fn queryOneRuntimeDebugFrom(self: *const DocSelf, selector: []const u8, scope_root: u32) DebugQueryResultType {
                 const mut_self: *DocSelf = @constCast(self);
+                var report: selector_debug.QueryDebugReport = .{};
                 report.reset(selector, scope_root, 0);
                 const arena = mut_self.ensureQueryOneArena();
                 _ = arena.reset(.retain_capacity);
                 const sel = ast.Selector.compileRuntime(arena.allocator(), selector) catch |err| {
                     report.setRuntimeParseError();
-                    return err;
+                    return .{
+                        .report = report,
+                        .err = err,
+                    };
                 };
-                return self.queryOneCachedDebugFrom(sel, scope_root, report);
+                return self.queryOneCachedDebugFrom(sel, scope_root);
             }
 
             fn queryOneCachedFrom(self: *const DocSelf, sel: ast.Selector, scope_root: u32) ?NodeTypeWrapper {
@@ -411,24 +466,30 @@ pub const ParseOptions = struct {
                 return self.nodeAt(idx);
             }
 
-            fn queryOneCachedDebugFrom(self: *const DocSelf, sel: ast.Selector, scope_root: u32, report: *selector_debug.QueryDebugReport) ?NodeTypeWrapper {
+            fn queryOneCachedDebugFrom(self: *const DocSelf, sel: ast.Selector, scope_root: u32) DebugQueryResultType {
                 const mut_self: *DocSelf = @constCast(self);
                 mut_self.ensureQueryPrereqs(sel);
-                const idx = matcher_debug.explainFirstMatch(DocSelf, self, sel, scope_root, report) orelse return null;
-                return self.nodeAt(idx);
+                var report: selector_debug.QueryDebugReport = .{};
+                const idx = matcher_debug.explainFirstMatch(DocSelf, self, sel, scope_root, &report) orelse {
+                    return .{ .report = report };
+                };
+                return .{
+                    .node = self.nodeAt(idx),
+                    .report = report,
+                };
             }
 
             /// Returns lazy iterator over matches for comptime selector.
             pub fn queryAll(self: *const DocSelf, comptime selector: []const u8) QueryIterType {
                 const sel = comptime ast.Selector.compile(selector);
-                return self.queryAllCached(&sel);
+                return self.queryAllCached(sel);
             }
 
             /// Returns lazy iterator over matches for precompiled selector.
-            pub fn queryAllCached(self: *const DocSelf, sel: *const ast.Selector) QueryIterType {
+            pub fn queryAllCached(self: *const DocSelf, sel: ast.Selector) QueryIterType {
                 const mut_self: *DocSelf = @constCast(self);
-                mut_self.ensureQueryPrereqs(sel.*);
-                return .{ .doc = @constCast(self), .selector = sel.*, .scope_root = InvalidIndex, .next_index = 1 };
+                mut_self.ensureQueryPrereqs(sel);
+                return .{ .doc = @constCast(self), .selector = sel, .scope_root = InvalidIndex, .next_index = 1 };
             }
 
             /// Parses selector at runtime and returns lazy iterator.
@@ -449,7 +510,7 @@ pub const ParseOptions = struct {
                 const sel = try ast.Selector.compileRuntime(arena.allocator(), selector);
                 mut_self.ensureQueryPrereqs(sel);
                 var out = if (scope_root == InvalidIndex)
-                    self.queryAllCached(&sel)
+                    self.queryAllCached(sel)
                 else
                     QueryIterType{
                         .doc = @constCast(self),
@@ -527,7 +588,7 @@ pub const ParseOptions = struct {
             }
 
             /// Default formatter uses HTML serialization for this node.
-            pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+            pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
                 return self.writeHtml(writer);
             }
 
@@ -624,7 +685,9 @@ pub const ParseOptions = struct {
                 }
 
                 var count: usize = 0;
-                for (self.nodes.items[1..]) |node| {
+                var scan_idx: usize = 1;
+                while (scan_idx < self.nodes.items.len) : (scan_idx += 1) {
+                    const node = self.nodes.items[scan_idx];
                     if (!isElementLike(node.kind)) continue;
                     const node_name = node.name_or_text.slice(self.source);
                     if (node_name.len != tag_name.len) continue;
@@ -670,25 +733,21 @@ pub const ParseOptions = struct {
             }
 
             /// Internal id-index lookup used by matcher acceleration path.
-            pub fn queryAccelLookupId(self: *const DocSelf, id: []const u8, used_index: *bool) ?u32 {
+            pub fn queryAccelLookupId(self: *const DocSelf, id: []const u8) QueryAccelIdLookup {
                 const mut_self: *DocSelf = @constCast(self);
                 if (!mut_self.ensureIdIndex()) {
-                    used_index.* = false;
-                    return null;
+                    return .unavailable;
                 }
                 const id_hash = hashIdValue(id);
                 const idx = mut_self.query_accel_id_map.get(id_hash) orelse {
-                    used_index.* = true;
-                    return null;
+                    return .miss;
                 };
                 const node = &mut_self.nodes.items[idx];
                 const current_id = attr_inline.getAttrValue(mut_self, node, "id") orelse {
-                    used_index.* = true;
-                    return null;
+                    return .miss;
                 };
                 if (std.mem.eql(u8, current_id, id)) {
-                    used_index.* = true;
-                    return idx;
+                    return .{ .hit = idx };
                 }
 
                 // Collision or stale key materialization: permanently disable the id
@@ -696,21 +755,18 @@ pub const ParseOptions = struct {
                 mut_self.query_accel_id_disabled = true;
                 mut_self.query_accel_id_built = false;
                 mut_self.query_accel_id_map.clearRetainingCapacity();
-                used_index.* = false;
-                return null;
+                return .unavailable;
             }
 
             /// Internal tag-index lookup used by matcher acceleration path.
-            pub fn queryAccelLookupTag(self: *const DocSelf, tag_name: []const u8, tag_key: u64, used_index: *bool) ?[]const u32 {
+            pub fn queryAccelLookupTag(self: *const DocSelf, tag_name: []const u8, tag_key: u64) QueryAccelTagLookup {
                 const mut_self: *DocSelf = @constCast(self);
                 const span = mut_self.ensureTagIndex(tag_name, tag_key) orelse {
-                    used_index.* = false;
-                    return null;
+                    return .unavailable;
                 };
-                used_index.* = true;
                 const start: usize = @intCast(span.start);
                 const end: usize = start + @as(usize, @intCast(span.len));
-                return mut_self.query_accel_tag_nodes.items[start..end];
+                return .{ .hit = mut_self.query_accel_tag_nodes.items[start..end] };
             }
 
             /// Returns first direct element-like child index for `parent_idx`, if any.
@@ -761,7 +817,7 @@ pub const ParseOptions = struct {
                 return InvalidIndex;
             }
 
-            /// Returns direct-child index iterator for `parent_idx`.
+            /// Returns direct-child node iterator for `parent_idx`.
             pub fn childrenIter(self: *const DocSelf, parent_idx: u32) ChildrenIterType {
                 return .{
                     .doc = self,
@@ -796,7 +852,7 @@ pub const Span = struct {
     }
 
     /// Formats this span for human-readable output.
-    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.print("Span{{start={}, end={}}}", .{ self.start, self.end });
     }
 };
@@ -816,9 +872,10 @@ fn assertNodeTypeLayouts() void {
     _ = @sizeOf(Node);
 }
 
-fn expectIterIds(iter: *QueryIter, expected_ids: []const []const u8) !void {
+fn expectIterIds(iter: QueryIter, expected_ids: []const []const u8) !void {
+    var mut_iter = iter;
     var i: usize = 0;
-    while (iter.next()) |node| {
+    while (mut_iter.next()) |node| {
         if (i >= expected_ids.len) return error.TestUnexpectedResult;
         const id = node.getAttributeValue("id") orelse return error.TestUnexpectedResult;
         try std.testing.expectEqualStrings(expected_ids[i], id);
@@ -828,8 +885,8 @@ fn expectIterIds(iter: *QueryIter, expected_ids: []const []const u8) !void {
 }
 
 fn expectDocQueryComptime(doc: *const Document, comptime selector: []const u8, expected_ids: []const []const u8) !void {
-    var it = doc.queryAll(selector);
-    try expectIterIds(&it, expected_ids);
+    const it = doc.queryAll(selector);
+    try expectIterIds(it, expected_ids);
 
     const first = doc.queryOne(selector);
     if (expected_ids.len == 0) {
@@ -842,8 +899,8 @@ fn expectDocQueryComptime(doc: *const Document, comptime selector: []const u8, e
 }
 
 fn expectDocQueryRuntime(doc: *const Document, selector: []const u8, expected_ids: []const []const u8) !void {
-    var it = try doc.queryAllRuntime(selector);
-    try expectIterIds(&it, expected_ids);
+    const it = try doc.queryAllRuntime(selector);
+    try expectIterIds(it, expected_ids);
 
     const first = try doc.queryOneRuntime(selector);
     if (expected_ids.len == 0) {
@@ -856,8 +913,8 @@ fn expectDocQueryRuntime(doc: *const Document, selector: []const u8, expected_id
 }
 
 fn expectNodeQueryComptime(scope: Node, comptime selector: []const u8, expected_ids: []const []const u8) !void {
-    var it = scope.queryAll(selector);
-    try expectIterIds(&it, expected_ids);
+    const it = scope.queryAll(selector);
+    try expectIterIds(it, expected_ids);
 
     const first = scope.queryOne(selector);
     if (expected_ids.len == 0) {
@@ -870,8 +927,8 @@ fn expectNodeQueryComptime(scope: Node, comptime selector: []const u8, expected_
 }
 
 fn expectNodeQueryRuntime(scope: Node, selector: []const u8, expected_ids: []const []const u8) !void {
-    var it = try scope.queryAllRuntime(selector);
-    try expectIterIds(&it, expected_ids);
+    const it = try scope.queryAllRuntime(selector);
+    try expectIterIds(it, expected_ids);
 
     const first = try scope.queryOneRuntime(selector);
     if (expected_ids.len == 0) {
@@ -953,6 +1010,41 @@ test "runtime queryAll iterator is invalidated by a newer runtime queryAll call"
     try std.testing.expect(old_it.next() == null);
     try std.testing.expect(new_it.next() != null);
     try std.testing.expect(new_it.next() == null);
+}
+
+test "runtime queryAll iterator is invalidated by clear and reparsing" {
+    const alloc = std.testing.allocator;
+    var doc = Document.init(alloc);
+    defer doc.deinit();
+
+    var html_a = "<div><span class='x'></span></div>".*;
+    try doc.parse(&html_a, .{});
+
+    var old_it = try doc.queryAllRuntime("span.x");
+    doc.clear();
+    try std.testing.expect(old_it.next() == null);
+    try std.testing.expect(doc.queryOne("span.x") == null);
+
+    var html_b = "<div><span class='y'></span></div>".*;
+    try doc.parse(&html_b, .{});
+    try std.testing.expect(old_it.next() == null);
+
+    var new_it = try doc.queryAllRuntime("span.y");
+    try std.testing.expect(new_it.next() != null);
+    try std.testing.expect(new_it.next() == null);
+}
+
+test "matcher queryOneIndex rejects invalid scope roots safely" {
+    const alloc = std.testing.allocator;
+    var doc = Document.init(alloc);
+    defer doc.deinit();
+
+    var html = "<div id='x'></div>".*;
+    try doc.parse(&html, .{});
+
+    const sel = comptime ast.Selector.compile("div");
+    const idx = matcher.queryOneIndex(Document, &doc, sel, @as(u32, @intCast(doc.nodes.items.len + 10)));
+    try std.testing.expect(idx == null);
 }
 
 test "raw text element metadata remains valid after child append growth" {
@@ -1073,9 +1165,9 @@ test "node-scoped queries return complete descendants only" {
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
     const sel = try ast.Selector.compileRuntime(arena.allocator(), "a.link");
-    var it = sibs.queryAllCached(&sel);
-    try expectIterIds(&it, &.{ "a1", "a2", "a3" });
-    const first = sibs.queryOneCached(&sel) orelse return error.TestUnexpectedResult;
+    const it = sibs.queryAllCached(sel);
+    try expectIterIds(it, &.{ "a1", "a2", "a3" });
+    const first = sibs.queryOneCached(sel) orelse return error.TestUnexpectedResult;
     const id = first.getAttributeValue("id") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("a1", id);
 }
@@ -1271,7 +1363,7 @@ test "attribute matching short-circuits and does not parse later attrs on early 
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
     const sel = try ast.Selector.compileRuntime(arena.allocator(), "div[href^=https][class*=button]");
-    try std.testing.expect(doc.queryOneCached(&sel) == null);
+    try std.testing.expect(doc.queryOneCached(sel) == null);
     try std.testing.expect((try doc.queryOneRuntime("div[href^=https][class*=button]")) == null);
 
     const node = doc.queryOne("#x") orelse return error.TestUnexpectedResult;
@@ -1340,9 +1432,9 @@ test "cached selector APIs are equivalent to runtime string wrappers" {
         const sel = try ast.Selector.compileRuntime(arena.allocator(), case.selector);
         try expectDocQueryRuntime(&doc, case.selector, case.expected);
 
-        var it = doc.queryAllCached(&sel);
-        try expectIterIds(&it, case.expected);
-        const first = doc.queryOneCached(&sel);
+        const it = doc.queryAllCached(sel);
+        try expectIterIds(it, case.expected);
+        const first = doc.queryOneCached(sel);
         if (case.expected.len == 0) {
             try std.testing.expect(first == null);
         } else {
@@ -1474,6 +1566,33 @@ test "optional-close p/li/td-th/dt-dd/head-body preserve expected query semantic
     try std.testing.expect(doc.queryOne("#td1 + #th1") != null);
     try std.testing.expect(doc.queryOne("#th1 + #td2") != null);
     try std.testing.expect(doc.queryOne("head + body") != null);
+}
+
+test "mismatched close with identical first8 prefix does not close long tag" {
+    const alloc = std.testing.allocator;
+    var doc = Document.init(alloc);
+    defer doc.deinit();
+
+    var html = "<abcdefgh1 id='outer'><span id='inner'></span></abcdefgh2><p id='after'></p>".*;
+    try doc.parse(&html, .{});
+
+    const outer = doc.queryOne("abcdefgh1#outer") orelse return error.TestUnexpectedResult;
+    const after = doc.queryOne("p#after") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(outer.index, after.parentNode().?.index);
+}
+
+test "processing-instruction-like nodes end at the next >" {
+    const alloc = std.testing.allocator;
+    var doc = Document.init(alloc);
+    defer doc.deinit();
+
+    var html = "<?xml version='1.0'><div id='x'></div><p id='y'></p>".*;
+    try doc.parse(&html, .{});
+
+    const x = doc.queryOne("div#x") orelse return error.TestUnexpectedResult;
+    const y = doc.queryOne("p#y") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("div", x.tagName());
+    try std.testing.expectEqualStrings("p", y.tagName());
 }
 
 test "attr fast-path names are equivalent to generic lookup semantics" {
@@ -1679,6 +1798,28 @@ test "parse option bundles preserve selector/query behavior for representative i
     try std.testing.expectEqualStrings(strict_empty, fast_empty);
 }
 
+test "whitespace-only text nodes drop only in fastest mode" {
+    const alloc = std.testing.allocator;
+
+    var strict_doc = Document.init(alloc);
+    defer strict_doc.deinit();
+    var fast_doc = Document.init(alloc);
+    defer fast_doc.deinit();
+
+    var strict_html = "<div id='x'> \n\t </div><div id='y'> hi </div>".*;
+    var fast_html = strict_html;
+
+    try strict_doc.parse(&strict_html, .{ .drop_whitespace_text_nodes = false });
+    try fast_doc.parse(&fast_html, .{ .drop_whitespace_text_nodes = true });
+
+    try std.testing.expectEqual(@as(usize, 5), strict_doc.nodes.items.len);
+    try std.testing.expectEqual(@as(usize, 4), fast_doc.nodes.items.len);
+
+    const y = fast_doc.queryOne("#y") orelse return error.TestUnexpectedResult;
+    const text = try y.innerTextWithOptions(alloc, .{ .normalize_whitespace = false });
+    try std.testing.expectEqualStrings(" hi ", text);
+}
+
 test "attribute scanner handles quoted > and self-closing tails" {
     const alloc = std.testing.allocator;
     var doc = Document.init(alloc);
@@ -1710,7 +1851,7 @@ test "attribute parsing still builds the DOM" {
     try std.testing.expect(doc.queryOne("#y") != null);
 }
 
-test "children() iterator traverses sibling-chain indexes" {
+test "children() iterator traverses sibling-chain nodes" {
     const alloc = std.testing.allocator;
     var doc = Document.init(alloc);
     defer doc.deinit();
@@ -1720,17 +1861,53 @@ test "children() iterator traverses sibling-chain indexes" {
 
     const root = doc.queryOne("div#root") orelse return error.TestUnexpectedResult;
     var kids = root.children();
-    var indexes: std.ArrayListUnmanaged(u32) = .{};
-    defer indexes.deinit(alloc);
-    try kids.collect(alloc, &indexes);
-    try std.testing.expectEqual(@as(usize, 2), indexes.items.len);
-    try std.testing.expectEqualStrings("a", (doc.nodeAt(indexes.items[0]) orelse return error.TestUnexpectedResult).getAttributeValue("id").?);
-    try std.testing.expectEqualStrings("b", (doc.nodeAt(indexes.items[1]) orelse return error.TestUnexpectedResult).getAttributeValue("id").?);
+    const nodes = try kids.collect(alloc);
+    defer alloc.free(nodes);
+    try std.testing.expectEqual(@as(usize, 2), nodes.len);
+    try std.testing.expectEqualStrings("a", nodes[0].getAttributeValue("id").?);
+    try std.testing.expectEqualStrings("b", nodes[1].getAttributeValue("id").?);
 
     var again = root.children();
-    indexes.clearRetainingCapacity();
-    try again.collect(alloc, &indexes);
-    try std.testing.expectEqual(@as(usize, 2), indexes.items.len);
+    const nodes_again = try again.collect(alloc);
+    defer alloc.free(nodes_again);
+    try std.testing.expectEqual(@as(usize, 2), nodes_again.len);
+}
+
+test "children() collect respects iterator progress" {
+    const alloc = std.testing.allocator;
+    var doc = Document.init(alloc);
+    defer doc.deinit();
+
+    var html = "<div id='root'><span id='a'></span><span id='b'></span><span id='c'></span></div>".*;
+    try doc.parse(&html, .{});
+
+    const root = doc.queryOne("div#root") orelse return error.TestUnexpectedResult;
+    var kids = root.children();
+    const first = kids.next() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("a", first.getAttributeValue("id").?);
+
+    const rest = try kids.collect(alloc);
+    defer alloc.free(rest);
+    try std.testing.expectEqual(@as(usize, 2), rest.len);
+    try std.testing.expectEqualStrings("b", rest[0].getAttributeValue("id").?);
+    try std.testing.expectEqualStrings("c", rest[1].getAttributeValue("id").?);
+}
+
+test "unquoted attribute values preserve slash characters" {
+    const alloc = std.testing.allocator;
+    var doc = Document.init(alloc);
+    defer doc.deinit();
+
+    var html = "<a id=x href=/docs/v1/api data-path=assets/img/logo.svg></a>".*;
+    try doc.parse(&html, .{});
+
+    const node = doc.queryOne("a#x") orelse return error.TestUnexpectedResult;
+    const href = node.getAttributeValue("href") orelse return error.TestUnexpectedResult;
+    const data_path = node.getAttributeValue("data-path") orelse return error.TestUnexpectedResult;
+
+    try std.testing.expectEqualStrings("/docs/v1/api", href);
+    try std.testing.expectEqualStrings("assets/img/logo.svg", data_path);
+    try std.testing.expect(doc.queryOne("a[href='/docs/v1/api'][data-path='assets/img/logo.svg']") != null);
 }
 
 test "moved document keeps node-scoped queries and navigation valid" {
@@ -1757,15 +1934,17 @@ test "query accel id/tag indexes match selector results" {
     const x = doc.queryOne("#x") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("a", x.raw().name_or_text.slice(doc.source));
 
-    var used_id = false;
-    const id_idx = doc.queryAccelLookupId("x", &used_id) orelse return error.TestUnexpectedResult;
-    try std.testing.expect(used_id);
+    const id_idx = switch (doc.queryAccelLookupId("x")) {
+        .hit => |idx| idx,
+        else => return error.TestUnexpectedResult,
+    };
     try std.testing.expectEqual(x.index, id_idx);
 
-    var used_tag = false;
     const a_key = tags.first8Key("a");
-    const tag_candidates = doc.queryAccelLookupTag("a", a_key, &used_tag) orelse return error.TestUnexpectedResult;
-    try std.testing.expect(used_tag);
+    const tag_candidates = switch (doc.queryAccelLookupTag("a", a_key)) {
+        .hit => |candidates| candidates,
+        else => return error.TestUnexpectedResult,
+    };
     try std.testing.expectEqual(@as(usize, 2), tag_candidates.len);
     try std.testing.expectEqual(x.index, tag_candidates[0]);
     try std.testing.expectEqualStrings("a", doc.nodes.items[tag_candidates[1]].name_or_text.slice(doc.source));
@@ -1775,9 +1954,10 @@ test "query accel id/tag indexes match selector results" {
 
     const x_node = doc.nodeAt(id_idx) orelse return error.TestUnexpectedResult;
     _ = x_node.getAttributeValue("class") orelse return error.TestUnexpectedResult;
-    used_id = false;
-    const id_idx_after = doc.queryAccelLookupId("x", &used_id) orelse return error.TestUnexpectedResult;
-    try std.testing.expect(used_id);
+    const id_idx_after = switch (doc.queryAccelLookupId("x")) {
+        .hit => |idx| idx,
+        else => return error.TestUnexpectedResult,
+    };
     try std.testing.expectEqual(id_idx, id_idx_after);
 }
 
@@ -1789,27 +1969,29 @@ test "query accel state is invalidated by parse and clear" {
     var html_a = "<div><a id='x'></a><a id='y'></a></div>".*;
     try doc.parse(&html_a, .{});
 
-    var used_id = false;
-    _ = doc.queryAccelLookupId("x", &used_id);
-    try std.testing.expect(used_id);
+    try std.testing.expect(doc.queryAccelLookupId("x") != .unavailable);
 
-    var used_tag = false;
-    _ = doc.queryAccelLookupTag("a", tags.first8Key("a"), &used_tag);
-    try std.testing.expect(used_tag);
+    try std.testing.expect(doc.queryAccelLookupTag("a", tags.first8Key("a")) != .unavailable);
     try std.testing.expect(doc.query_accel_id_built);
     try std.testing.expect(doc.query_accel_tag_nodes.items.len != 0);
 
-    var html_b = "<main><p id='z'></p></main>".*;
+    var html_b = "<main><p id='z'>owned</p></main>".*;
     try doc.parse(&html_b, .{});
     try std.testing.expect(!doc.query_accel_id_built);
     try std.testing.expectEqual(@as(usize, 0), doc.query_accel_tag_nodes.items.len);
     try std.testing.expectEqual(@as(usize, 0), doc.query_accel_tag_entries.items.len);
 
-    used_id = false;
-    try std.testing.expect(doc.queryAccelLookupId("x", &used_id) == null);
-    try std.testing.expect(used_id);
+    try std.testing.expect(doc.queryAccelLookupId("x") == .miss);
+
+    const text_before_clear = (doc.queryOne("#z") orelse return error.TestUnexpectedResult)
+        .innerTextWithOptions(alloc, .{ .normalize_whitespace = false }) catch return error.TestUnexpectedResult;
+    try std.testing.expect(doc.isOwned(text_before_clear));
 
     doc.clear();
+    try std.testing.expectEqual(@as(usize, 0), doc.nodes.items.len);
+    try std.testing.expectEqual(@as(usize, 0), doc.source.len);
+    try std.testing.expect(!doc.isOwned(text_before_clear));
+    try std.testing.expect(doc.queryOne("main") == null);
     try std.testing.expect(!doc.query_accel_id_built);
     try std.testing.expectEqual(@as(usize, 0), doc.query_accel_tag_nodes.items.len);
     try std.testing.expectEqual(@as(usize, 0), doc.query_accel_tag_entries.items.len);
@@ -1818,24 +2000,22 @@ test "query accel state is invalidated by parse and clear" {
 test "runtime attr-heavy selector stress uses in-node parents" {
     const alloc = std.testing.allocator;
 
-    var builder = std.ArrayList(u8).empty;
-    defer builder.deinit(alloc);
+    var builder: std.Io.Writer.Allocating = .init(alloc);
+    defer builder.deinit();
     const prefix = "<html><body><div id='root'>";
     const suffix = "</div></body></html>";
-    try builder.ensureUnusedCapacity(alloc, prefix.len + suffix.len);
-    builder.appendSliceAssumeCapacity(prefix);
+    try builder.writer.writeAll(prefix);
     var i: usize = 0;
     while (i < 1024) : (i += 1) {
         if ((i % 4) == 0) {
-            try std.fmt.format(builder.writer(alloc), "<a id='a{d}' href='https://example/{d}' class='nav button'>x</a>", .{ i, i });
+            try builder.writer.print("<a id='a{d}' href='https://example/{d}' class='nav button'>x</a>", .{ i, i });
         } else {
-            try std.fmt.format(builder.writer(alloc), "<a id='a{d}' href='/local/{d}' class='nav link'>x</a>", .{ i, i });
+            try builder.writer.print("<a id='a{d}' href='/local/{d}' class='nav link'>x</a>", .{ i, i });
         }
     }
-    try builder.ensureUnusedCapacity(alloc, suffix.len);
-    builder.appendSliceAssumeCapacity(suffix);
+    try builder.writer.writeAll(suffix);
 
-    const html = try builder.toOwnedSlice(alloc);
+    const html = try builder.toOwnedSlice();
     defer alloc.free(html);
 
     var doc = Document.init(alloc);
@@ -1846,12 +2026,10 @@ test "runtime attr-heavy selector stress uses in-node parents" {
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
     const compiled = try ast.Selector.compileRuntime(arena.allocator(), selector);
-    try std.testing.expect(!compiled.requires_parent);
-
     var loops: usize = 0;
     while (loops < 256) : (loops += 1) {
         const a = try doc.queryOneRuntime(selector);
-        const b = doc.queryOneCached(&compiled);
+        const b = doc.queryOneCached(compiled);
         try std.testing.expect((a == null) == (b == null));
     }
     try std.testing.expectEqual(0, doc.nodes.items[1].parent);
@@ -1860,7 +2038,7 @@ test "runtime attr-heavy selector stress uses in-node parents" {
 test "bench fixture attr-heavy runtime and cached query smoke" {
     const alloc = std.testing.allocator;
     const fixture_path = "bench/fixtures/rust-lang.html";
-    const fixture = std.fs.cwd().readFileAlloc(alloc, fixture_path, 64 * 1024 * 1024) catch |err| switch (err) {
+    const fixture = std.Io.Dir.cwd().readFileAlloc(std.testing.io, fixture_path, alloc, std.Io.Limit.limited(64 * 1024 * 1024)) catch |err| switch (err) {
         error.FileNotFound => return error.SkipZigTest,
         else => return err,
     };
@@ -1871,8 +2049,6 @@ test "bench fixture attr-heavy runtime and cached query smoke" {
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
     const compiled = try ast.Selector.compileRuntime(arena.allocator(), selector);
-    try std.testing.expect(!compiled.requires_parent);
-
     {
         const html = try alloc.dupe(u8, fixture);
         defer alloc.free(html);
@@ -1884,7 +2060,7 @@ test "bench fixture attr-heavy runtime and cached query smoke" {
         var loops: usize = 0;
         while (loops < 32) : (loops += 1) {
             const a = try doc.queryOneRuntime(selector);
-            const b = doc.queryOneCached(&compiled);
+            const b = doc.queryOneCached(compiled);
             try std.testing.expect((a == null) == (b == null));
         }
         try std.testing.expectEqual(0, doc.nodes.items[1].parent);
@@ -1901,7 +2077,7 @@ test "bench fixture attr-heavy runtime and cached query smoke" {
         var loops: usize = 0;
         while (loops < 32) : (loops += 1) {
             const a = try doc.queryOneRuntime(selector);
-            const b = doc.queryOneCached(&compiled);
+            const b = doc.queryOneCached(compiled);
             try std.testing.expect((a == null) == (b == null));
         }
         try std.testing.expectEqual(0, doc.nodes.items[1].parent);
@@ -1916,10 +2092,10 @@ test "queryOneRuntimeDebug reports runtime selector parse errors" {
     var html = "<div id='x'></div>".*;
     try doc.parse(&html, .{});
 
-    var report: selector_debug.QueryDebugReport = .{};
-    try std.testing.expectError(error.InvalidSelector, doc.queryOneRuntimeDebug("div[", &report));
-    try std.testing.expect(report.runtime_parse_error);
-    try std.testing.expectEqualStrings("div[", report.selector_source);
+    const result = doc.queryOneRuntimeDebug("div[");
+    try std.testing.expectEqual(@as(?runtime_selector.Error, error.InvalidSelector), result.err);
+    try std.testing.expect(result.report.runtime_parse_error);
+    try std.testing.expectEqualStrings("div[", result.report.selector_source);
 }
 
 test "queryOneDebug reports near misses and matched index" {
@@ -1930,17 +2106,17 @@ test "queryOneDebug reports near misses and matched index" {
     var html = "<div><a id='x' class='k'></a><a id='y'></a></div>".*;
     try doc.parse(&html, .{});
 
-    var miss_report: selector_debug.QueryDebugReport = .{};
-    const miss = doc.queryOneDebug("a[href^=https]", &miss_report);
-    try std.testing.expect(miss == null);
-    try std.testing.expect(miss_report.visited_elements > 0);
-    try std.testing.expect(miss_report.near_miss_len > 0);
-    try std.testing.expect(miss_report.near_misses[0].reason.kind != .none);
+    const miss = doc.queryOneDebug("a[href^=https]");
+    try std.testing.expect(miss.err == null);
+    try std.testing.expect(miss.node == null);
+    try std.testing.expect(miss.report.visited_elements > 0);
+    try std.testing.expect(miss.report.near_miss_len > 0);
+    try std.testing.expect(miss.report.near_misses[0].reason.kind != .none);
 
-    var hit_report: selector_debug.QueryDebugReport = .{};
-    const hit = doc.queryOneDebug("a#x", &hit_report) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(hit.index, hit_report.matched_index);
-    try std.testing.expectEqual(@as(u16, 0), hit_report.matched_group);
+    const hit = doc.queryOneDebug("a#x");
+    const hit_node = hit.node orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(hit_node.index, hit.report.matched_index);
+    try std.testing.expectEqual(@as(u16, 0), hit.report.matched_group);
 }
 
 test "node-scoped runtime debug query reports scope/combinator failures" {
@@ -1952,12 +2128,12 @@ test "node-scoped runtime debug query reports scope/combinator failures" {
     try doc.parse(&html, .{});
 
     const root = doc.queryOne("root") orelse return error.TestUnexpectedResult;
-    var report: selector_debug.QueryDebugReport = .{};
-    const found = try root.queryOneRuntimeDebug("> span#inside", &report);
-    try std.testing.expect(found == null);
-    try std.testing.expect(report.scope_root == root.index);
-    try std.testing.expect(report.near_miss_len > 0);
-    try std.testing.expect(report.near_misses[0].reason.kind != .none);
+    const found = root.queryOneRuntimeDebug("> span#inside");
+    try std.testing.expect(found.err == null);
+    try std.testing.expect(found.node == null);
+    try std.testing.expect(found.report.scope_root == root.index);
+    try std.testing.expect(found.report.near_miss_len > 0);
+    try std.testing.expect(found.report.near_misses[0].reason.kind != .none);
 }
 
 const HookProbe = struct {
@@ -2013,14 +2189,14 @@ test "instrumentation wrappers invoke compile-time hooks and preserve results" {
     var hooks: HookProbe = .{};
 
     var html = "<div><a id='x' href='https://example'></a></div>".*;
-    try instrumentation.parseWithHooks(&doc, &html, .{}, &hooks);
+    try instrumentation.parseWithHooks(std.testing.io, &doc, &html, .{}, &hooks);
     try std.testing.expectEqual(@as(usize, 1), hooks.parse_start_calls);
     try std.testing.expectEqual(@as(usize, 1), hooks.parse_end_calls);
     try std.testing.expect(hooks.last_parse_stats.elapsed_ns > 0);
     try std.testing.expectEqual(html.len, hooks.last_input_len);
     try std.testing.expect(hooks.last_parse_stats.node_count >= 2);
 
-    const runtime_one = try instrumentation.queryOneRuntimeWithHooks(&doc, "a#x", &hooks);
+    const runtime_one = try instrumentation.queryOneRuntimeWithHooks(std.testing.io, &doc, "a#x", &hooks);
     try std.testing.expect(runtime_one != null);
     try std.testing.expectEqual(instrumentation.QueryInstrumentationKind.one_runtime, hooks.last_query_kind);
     try std.testing.expectEqual(@as(?bool, true), hooks.last_query_stats.matched);
@@ -2029,16 +2205,16 @@ test "instrumentation wrappers invoke compile-time hooks and preserve results" {
     defer arena.deinit();
     const sel = try ast.Selector.compileRuntime(arena.allocator(), "a#x");
 
-    const cached_one = instrumentation.queryOneCachedWithHooks(&doc, &sel, &hooks);
+    const cached_one = instrumentation.queryOneCachedWithHooks(std.testing.io, &doc, sel, &hooks);
     try std.testing.expect(cached_one != null);
     try std.testing.expectEqual(instrumentation.QueryInstrumentationKind.one_cached, hooks.last_query_kind);
     try std.testing.expectEqual(@as(?bool, true), hooks.last_query_stats.matched);
 
-    _ = try instrumentation.queryAllRuntimeWithHooks(&doc, "a", &hooks);
+    _ = try instrumentation.queryAllRuntimeWithHooks(std.testing.io, &doc, "a", &hooks);
     try std.testing.expectEqual(instrumentation.QueryInstrumentationKind.all_runtime, hooks.last_query_kind);
     try std.testing.expectEqual(@as(?bool, null), hooks.last_query_stats.matched);
 
-    _ = instrumentation.queryAllCachedWithHooks(&doc, &sel, &hooks);
+    _ = instrumentation.queryAllCachedWithHooks(std.testing.io, &doc, sel, &hooks);
     try std.testing.expectEqual(instrumentation.QueryInstrumentationKind.all_cached, hooks.last_query_kind);
     try std.testing.expectEqual(@as(?bool, null), hooks.last_query_stats.matched);
     try std.testing.expect(hooks.query_start_calls >= 4);

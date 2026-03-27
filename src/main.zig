@@ -4,9 +4,9 @@ const default_options: htmlparser.ParseOptions = .{};
 const Document = default_options.GetDocument();
 
 /// Minimal stdout smoke print used by the demo executable.
-pub fn bufferedPrint() !void {
+pub fn bufferedPrint(io: std.Io) !void {
     var stdout_buffer: [1024]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buffer);
     const stdout = &stdout_writer.interface;
 
     try stdout.print("htmlparser: run `zig build test`\n", .{});
@@ -14,8 +14,8 @@ pub fn bufferedPrint() !void {
 }
 
 /// Demo executable entrypoint that parses a tiny document and prints one query result.
-pub fn main() !void {
-    try bufferedPrint();
+pub fn main(init: std.process.Init) !void {
+    try bufferedPrint(init.io);
 
     var doc = Document.init(std.heap.page_allocator);
     defer doc.deinit();

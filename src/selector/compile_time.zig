@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("ast.zig");
 const runtime = @import("runtime.zig");
+const test_helpers = @import("test_helpers.zig");
 
 /// Allocator facade that allows selector compilation during comptime execution.
 pub const ComptimeAllocator = struct {
@@ -45,7 +46,7 @@ pub const ComptimeAllocator = struct {
     }
 
     /// Formats this allocator marker for human-readable output.
-    pub fn format(_: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+    pub fn format(_: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.writeAll("ComptimeAllocator{}");
     }
 };
@@ -65,7 +66,6 @@ pub fn compileImpl(comptime source: []const u8) ast.Selector {
 
     return .{
         .source = source,
-        .requires_parent = parsed.requires_parent,
         .groups = groups,
         .compounds = compounds,
         .classes = classes,
@@ -89,31 +89,12 @@ test "compile-time parser" {
 
 test "compile-time parser covers all attribute operators" {
     const sel = comptime compileImpl("div[a][b=v][c^=x][d$=y][e*=z][f~=m][g|=en]");
-    try std.testing.expectEqual(@as(usize, 1), sel.groups.len);
-    try std.testing.expectEqual(@as(usize, 1), sel.compounds.len);
-
-    const comp = sel.compounds[0];
-    try std.testing.expectEqual(@as(u32, 7), comp.attr_len);
-    try std.testing.expect(sel.attrs[comp.attr_start + 0].op == .exists);
-    try std.testing.expect(sel.attrs[comp.attr_start + 1].op == .eq);
-    try std.testing.expect(sel.attrs[comp.attr_start + 2].op == .prefix);
-    try std.testing.expect(sel.attrs[comp.attr_start + 3].op == .suffix);
-    try std.testing.expect(sel.attrs[comp.attr_start + 4].op == .contains);
-    try std.testing.expect(sel.attrs[comp.attr_start + 5].op == .includes);
-    try std.testing.expect(sel.attrs[comp.attr_start + 6].op == .dash_match);
+    try test_helpers.expectAllAttributeOps(sel);
 }
 
 test "compile-time parser tracks combinator chain and grouping" {
     const sel = comptime compileImpl("a b > c + d ~ e, #x");
-    try std.testing.expectEqual(@as(usize, 2), sel.groups.len);
-    try std.testing.expectEqual(@as(usize, 6), sel.compounds.len);
-
-    try std.testing.expect(sel.compounds[0].combinator == .none);
-    try std.testing.expect(sel.compounds[1].combinator == .descendant);
-    try std.testing.expect(sel.compounds[2].combinator == .child);
-    try std.testing.expect(sel.compounds[3].combinator == .adjacent);
-    try std.testing.expect(sel.compounds[4].combinator == .sibling);
-    try std.testing.expect(sel.compounds[5].combinator == .none);
+    try test_helpers.expectCombinatorChain(sel);
 }
 
 test "compile-time parser supports leading combinator and nth-child variants" {

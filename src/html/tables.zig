@@ -22,23 +22,23 @@ pub fn makeLowerTable() [256]u8 {
 }
 
 /// Returns whether byte is ASCII whitespace relevant to HTML tokenization.
-pub fn isWhitespace(c: u8) bool {
+fn isWhitespace(c: u8) bool {
     return c == ' ' or c == '\n' or c == '\r' or c == '\t' or c == '\x0c';
 }
 
 /// Returns whether byte is a valid identifier start.
-pub fn isIdentStart(c: u8) bool {
+fn isIdentStart(c: u8) bool {
     return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_' or c == ':';
 }
 
 /// Returns whether byte is a valid identifier continuation.
-pub fn isIdentChar(c: u8) bool {
+fn isIdentChar(c: u8) bool {
     return isIdentStart(c) or (c >= '0' and c <= '9') or c == '-' or c == '.';
 }
 
 /// Returns whether byte is consumed by the HTML tag-name state.
 /// Matches the tokenizer shape: continue until whitespace, `/`, `>`, or NUL.
-pub fn isTagNameChar(c: u8) bool {
+fn isTagNameChar(c: u8) bool {
     return !isWhitespace(c) and c != '/' and c != '>' and c != 0;
 }
 
@@ -52,6 +52,11 @@ pub const IdentStartTable = makeClassTable(isIdentStart);
 pub const IdentCharTable = makeClassTable(isIdentChar);
 /// Precomputed tag-name-char classification table.
 pub const TagNameCharTable = makeClassTable(isTagNameChar);
+
+/// 32-bit FNV-1a offset basis.
+pub const FnvOffset: u32 = 2166136261;
+/// 32-bit FNV-1a prime.
+pub const FnvPrime: u32 = 16777619;
 
 /// Lowercases one ASCII byte using `LowerTable`.
 pub inline fn lower(c: u8) u8 {
@@ -76,6 +81,20 @@ pub fn eqlIgnoreCaseAscii(a: []const u8, b: []const u8) bool {
 pub fn startsWithIgnoreCaseAscii(hay: []const u8, needle: []const u8) bool {
     if (needle.len > hay.len) return false;
     return eqlIgnoreCaseAscii(hay[0..needle.len], needle);
+}
+
+/// Hashes ASCII bytes case-insensitively using 32-bit FNV-1a.
+pub fn hashIgnoreCaseAscii(bytes: []const u8) u32 {
+    var h: u32 = FnvOffset;
+    for (bytes) |c| {
+        h = hashIgnoreCaseAsciiUpdate(h, c);
+    }
+    return h;
+}
+
+/// Incremental step for ASCII case-insensitive FNV-1a hashing.
+pub inline fn hashIgnoreCaseAsciiUpdate(h: u32, c: u8) u32 {
+    return (h ^ @as(u32, lower(c))) *% FnvPrime;
 }
 
 /// Trims ASCII whitespace from both ends of `slice`.

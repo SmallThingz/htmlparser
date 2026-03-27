@@ -10,7 +10,7 @@ pub const QueryInstrumentationKind = enum(u8) {
     all_cached,
 
     /// Formats this query kind for human-readable output.
-    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.writeAll(@tagName(self));
     }
 };
@@ -22,7 +22,7 @@ pub const ParseInstrumentationStats = struct {
     node_count: usize,
 
     /// Formats parse timing statistics for human-readable output.
-    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.print("ParseInstrumentationStats{{elapsed_ns={}, input_len={}, node_count={}}}", .{
             self.elapsed_ns,
             self.input_len,
@@ -39,7 +39,7 @@ pub const QueryInstrumentationStats = struct {
     matched: ?bool = null,
 
     /// Formats query timing statistics for human-readable output.
-    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.print("QueryInstrumentationStats{{elapsed_ns={}, selector_len={}, kind={s}, matched={?}}}", .{
             self.elapsed_ns,
             self.selector_len,
@@ -49,9 +49,10 @@ pub const QueryInstrumentationStats = struct {
     }
 };
 
-fn elapsedNs(start: i128, finish: i128) u64 {
-    if (finish <= start) return 0;
-    return @intCast(finish - start);
+fn elapsedNs(start: std.Io.Timestamp, finish: std.Io.Timestamp) u64 {
+    const diff = start.durationTo(finish).toNanoseconds();
+    if (diff <= 0) return 0;
+    return @intCast(diff);
 }
 
 fn HookDeclType(comptime H: type) type {
@@ -69,15 +70,15 @@ fn matchedFromValue(value: anytype) ?bool {
 }
 
 /// Parses `input` and invokes optional parse hooks when provided.
-pub fn parseWithHooks(doc: anytype, input: []u8, comptime opts: ParseOptions, hooks: anytype) !void {
+pub fn parseWithHooks(io: std.Io, doc: anytype, input: []u8, comptime opts: ParseOptions, hooks: anytype) !void {
     if (comptime @hasDecl(HookDeclType(@TypeOf(hooks)), "onParseStart")) {
         hooks.onParseStart(input.len);
     }
 
-    const start = std.time.nanoTimestamp();
+    const start = std.Io.Timestamp.now(io, .awake);
     try doc.parse(input, opts);
     const stats: ParseInstrumentationStats = .{
-        .elapsed_ns = elapsedNs(start, std.time.nanoTimestamp()),
+        .elapsed_ns = elapsedNs(start, std.Io.Timestamp.now(io, .awake)),
         .input_len = input.len,
         .node_count = doc.nodes.items.len,
     };
@@ -88,17 +89,17 @@ pub fn parseWithHooks(doc: anytype, input: []u8, comptime opts: ParseOptions, ho
 }
 
 /// Executes `queryOneRuntime` and emits query timing hooks.
-pub fn queryOneRuntimeWithHooks(doc: anytype, selector: []const u8, hooks: anytype) @TypeOf(doc.queryOneRuntime(selector)) {
+pub fn queryOneRuntimeWithHooks(io: std.Io, doc: anytype, selector: []const u8, hooks: anytype) @TypeOf(doc.queryOneRuntime(selector)) {
     if (comptime @hasDecl(HookDeclType(@TypeOf(hooks)), "onQueryStart")) {
         hooks.onQueryStart(.one_runtime, selector.len);
     }
 
-    const start = std.time.nanoTimestamp();
+    const start = std.Io.Timestamp.now(io, .awake);
     const out = doc.queryOneRuntime(selector);
     if (out) |value| {
         if (comptime @hasDecl(HookDeclType(@TypeOf(hooks)), "onQueryEnd")) {
             hooks.onQueryEnd(QueryInstrumentationStats{
-                .elapsed_ns = elapsedNs(start, std.time.nanoTimestamp()),
+                .elapsed_ns = elapsedNs(start, std.Io.Timestamp.now(io, .awake)),
                 .selector_len = selector.len,
                 .kind = .one_runtime,
                 .matched = matchedFromValue(value),
@@ -108,7 +109,7 @@ pub fn queryOneRuntimeWithHooks(doc: anytype, selector: []const u8, hooks: anyty
     } else |err| {
         if (comptime @hasDecl(HookDeclType(@TypeOf(hooks)), "onQueryEnd")) {
             hooks.onQueryEnd(QueryInstrumentationStats{
-                .elapsed_ns = elapsedNs(start, std.time.nanoTimestamp()),
+                .elapsed_ns = elapsedNs(start, std.Io.Timestamp.now(io, .awake)),
                 .selector_len = selector.len,
                 .kind = .one_runtime,
                 .matched = null,
@@ -119,16 +120,16 @@ pub fn queryOneRuntimeWithHooks(doc: anytype, selector: []const u8, hooks: anyty
 }
 
 /// Executes `queryOneCached` and emits query timing hooks.
-pub fn queryOneCachedWithHooks(doc: anytype, sel: *const ast.Selector, hooks: anytype) @TypeOf(doc.queryOneCached(sel)) {
+pub fn queryOneCachedWithHooks(io: std.Io, doc: anytype, sel: ast.Selector, hooks: anytype) @TypeOf(doc.queryOneCached(sel)) {
     if (comptime @hasDecl(HookDeclType(@TypeOf(hooks)), "onQueryStart")) {
         hooks.onQueryStart(.one_cached, sel.source.len);
     }
 
-    const start = std.time.nanoTimestamp();
+    const start = std.Io.Timestamp.now(io, .awake);
     const value = doc.queryOneCached(sel);
     if (comptime @hasDecl(HookDeclType(@TypeOf(hooks)), "onQueryEnd")) {
         hooks.onQueryEnd(QueryInstrumentationStats{
-            .elapsed_ns = elapsedNs(start, std.time.nanoTimestamp()),
+            .elapsed_ns = elapsedNs(start, std.Io.Timestamp.now(io, .awake)),
             .selector_len = sel.source.len,
             .kind = .one_cached,
             .matched = matchedFromValue(value),
@@ -138,17 +139,17 @@ pub fn queryOneCachedWithHooks(doc: anytype, sel: *const ast.Selector, hooks: an
 }
 
 /// Executes `queryAllRuntime` and emits query timing hooks.
-pub fn queryAllRuntimeWithHooks(doc: anytype, selector: []const u8, hooks: anytype) @TypeOf(doc.queryAllRuntime(selector)) {
+pub fn queryAllRuntimeWithHooks(io: std.Io, doc: anytype, selector: []const u8, hooks: anytype) @TypeOf(doc.queryAllRuntime(selector)) {
     if (comptime @hasDecl(HookDeclType(@TypeOf(hooks)), "onQueryStart")) {
         hooks.onQueryStart(.all_runtime, selector.len);
     }
 
-    const start = std.time.nanoTimestamp();
+    const start = std.Io.Timestamp.now(io, .awake);
     const out = doc.queryAllRuntime(selector);
     if (out) |iter| {
         if (comptime @hasDecl(HookDeclType(@TypeOf(hooks)), "onQueryEnd")) {
             hooks.onQueryEnd(QueryInstrumentationStats{
-                .elapsed_ns = elapsedNs(start, std.time.nanoTimestamp()),
+                .elapsed_ns = elapsedNs(start, std.Io.Timestamp.now(io, .awake)),
                 .selector_len = selector.len,
                 .kind = .all_runtime,
                 .matched = null,
@@ -158,7 +159,7 @@ pub fn queryAllRuntimeWithHooks(doc: anytype, selector: []const u8, hooks: anyty
     } else |err| {
         if (comptime @hasDecl(HookDeclType(@TypeOf(hooks)), "onQueryEnd")) {
             hooks.onQueryEnd(QueryInstrumentationStats{
-                .elapsed_ns = elapsedNs(start, std.time.nanoTimestamp()),
+                .elapsed_ns = elapsedNs(start, std.Io.Timestamp.now(io, .awake)),
                 .selector_len = selector.len,
                 .kind = .all_runtime,
                 .matched = null,
@@ -169,16 +170,16 @@ pub fn queryAllRuntimeWithHooks(doc: anytype, selector: []const u8, hooks: anyty
 }
 
 /// Executes `queryAllCached` and emits query timing hooks.
-pub fn queryAllCachedWithHooks(doc: anytype, sel: *const ast.Selector, hooks: anytype) @TypeOf(doc.queryAllCached(sel)) {
+pub fn queryAllCachedWithHooks(io: std.Io, doc: anytype, sel: ast.Selector, hooks: anytype) @TypeOf(doc.queryAllCached(sel)) {
     if (comptime @hasDecl(HookDeclType(@TypeOf(hooks)), "onQueryStart")) {
         hooks.onQueryStart(.all_cached, sel.source.len);
     }
 
-    const start = std.time.nanoTimestamp();
+    const start = std.Io.Timestamp.now(io, .awake);
     const iter = doc.queryAllCached(sel);
     if (comptime @hasDecl(HookDeclType(@TypeOf(hooks)), "onQueryEnd")) {
         hooks.onQueryEnd(QueryInstrumentationStats{
-            .elapsed_ns = elapsedNs(start, std.time.nanoTimestamp()),
+            .elapsed_ns = elapsedNs(start, std.Io.Timestamp.now(io, .awake)),
             .selector_len = sel.source.len,
             .kind = .all_cached,
             .matched = null,

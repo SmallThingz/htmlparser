@@ -97,10 +97,10 @@ test "writeHtml serializes node subtree" {
 
     const div = doc.queryOne("div") orelse return error.TestUnexpectedResult;
 
-    var out = std.ArrayList(u8).empty;
-    defer out.deinit(alloc);
-    try div.writeHtml(out.writer(alloc));
-    try std.testing.expectEqualStrings("<div id='a'><span>v</span></div>", out.items);
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    defer out.deinit();
+    try div.writeHtml(&out.writer);
+    try std.testing.expectEqualStrings("<div id='a'><span>v</span></div>", out.written());
 }
 
 test "writeHtml respects in-place attr parsing and void tags" {
@@ -118,10 +118,10 @@ test "writeHtml respects in-place attr parsing and void tags" {
     _ = img.getAttributeValue("class") orelse return error.TestUnexpectedResult;
     _ = img.getAttributeValue("data-q") orelse return error.TestUnexpectedResult;
 
-    var out = std.ArrayList(u8).empty;
-    defer out.deinit(alloc);
-    try img.writeHtml(out.writer(alloc));
-    try std.testing.expectEqualStrings("<img id=\"i\" class=\"x\" data-q=\"1>2\">", out.items);
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    defer out.deinit();
+    try img.writeHtml(&out.writer);
+    try std.testing.expectEqualStrings("<img id=\"i\" class=\"x\" data-q=\"1>2\">", out.written());
 }
 
 test "writeHtml reflects in-place text decoding" {
@@ -138,10 +138,10 @@ test "writeHtml reflects in-place text decoding" {
     const p = doc.queryOne("p") orelse return error.TestUnexpectedResult;
     _ = try p.innerText(alloc);
 
-    var out = std.ArrayList(u8).empty;
-    defer out.deinit(alloc);
-    try p.writeHtml(out.writer(alloc));
-    try std.testing.expectEqualStrings("<p>& <</p>", out.items);
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    defer out.deinit();
+    try p.writeHtml(&out.writer);
+    try std.testing.expectEqualStrings("<p>& <</p>", out.written());
 }
 
 test "writeHtml drops whitespace-only text nodes when configured" {
@@ -157,10 +157,10 @@ test "writeHtml drops whitespace-only text nodes when configured" {
 
     const div = doc.queryOne("div") orelse return error.TestUnexpectedResult;
 
-    var out = std.ArrayList(u8).empty;
-    defer out.deinit(alloc);
-    try div.writeHtml(out.writer(alloc));
-    try std.testing.expectEqualStrings("<div> a <span> b </span> c </div>", out.items);
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    defer out.deinit();
+    try div.writeHtml(&out.writer);
+    try std.testing.expectEqualStrings("<div> a <span> b </span> c </div>", out.written());
 }
 
 test "writeHtml parses and prints complex document" {
@@ -229,8 +229,8 @@ test "writeHtmlSelf excludes children" {
 
     const div = doc.queryOne("div") orelse return error.TestUnexpectedResult;
 
-    var out = std.ArrayList(u8).empty;
-    defer out.deinit(alloc);
-    try div.writeHtmlSelf(out.writer(alloc));
-    try std.testing.expectEqualStrings("<div id='a'>", out.items);
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    defer out.deinit();
+    try div.writeHtmlSelf(&out.writer);
+    try std.testing.expectEqualStrings("<div id='a'>", out.written());
 }

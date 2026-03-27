@@ -24,7 +24,7 @@ pub const DebugFailureKind = enum(u8) {
     scope,
 
     /// Formats this failure kind for human-readable output.
-    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.writeAll(@tagName(self));
     }
 };
@@ -42,7 +42,7 @@ pub const Failure = struct {
     }
 
     /// Formats this failure record for human-readable output.
-    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.print("Failure{{kind={s}, group_index={}, compound_index={}, predicate_index={}}}", .{
             @tagName(self.kind),
             self.group_index,
@@ -58,7 +58,7 @@ pub const NearMiss = struct {
     reason: Failure = .{},
 
     /// Formats this near-miss record for human-readable output.
-    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.print("NearMiss{{node_index={}, reason=", .{self.node_index});
         try self.reason.format(writer);
         try writer.writeAll("}");
@@ -107,7 +107,7 @@ pub const QueryDebugReport = struct {
     }
 
     /// Formats summary debug report data for human-readable output.
-    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.print(
             "QueryDebugReport{{selector_source=\"{s}\", scope_root={}, visited_elements={}, matched_index={}, matched_group={}, runtime_parse_error={}, group_count={}, near_miss_len={}}}",
             .{

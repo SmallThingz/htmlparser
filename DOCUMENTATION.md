@@ -83,7 +83,7 @@ All examples are verified by running `zig build examples-check`
   - `lastChild()`
   - `nextSibling()`
   - `prevSibling()`
-  - `children()` (borrowed `[]const u32` index view)
+  - `children()` (iterator of wrapped child nodes; `collect(allocator)` returns an owned `[]Node`)
 - Text:
   - `innerText(allocator)` (borrowed or allocated depending on shape)
   - `innerTextWithOptions(allocator, TextOptions)`
@@ -193,49 +193,49 @@ Source: `bench/results/latest.json` (`stable` profile).
 
 | Fixture | ours | lol-html | lexbor |
 |---|---:|---:|---:|
-| `rust-lang.html` | 1447.99 | 1474.65 | 332.72 |
-| `wiki-html.html` | 1645.45 | 1215.04 | 271.24 |
-| `mdn-html.html` | 2570.09 | 1879.00 | 404.50 |
-| `w3-html52.html` | 1064.19 | 764.62 | 199.22 |
-| `hn.html` | 1263.60 | 885.26 | 223.15 |
-| `python-org.html` | 1549.02 | 1356.21 | 284.19 |
-| `kernel-org.html` | 1440.47 | 1300.81 | 276.52 |
-| `gnu-org.html` | 1917.36 | 1482.15 | 317.74 |
-| `ziglang-org.html` | 1480.49 | 1257.62 | 291.72 |
-| `ziglang-doc-master.html` | 1122.44 | 987.16 | 214.23 |
-| `wikipedia-unicode-list.html` | 1247.00 | 1024.98 | 215.21 |
-| `whatwg-html-spec.html` | 1113.73 | 841.16 | 210.83 |
-| `synthetic-forms.html` | 1046.17 | 710.72 | 174.94 |
-| `synthetic-table-grid.html` | 768.56 | 622.31 | 152.86 |
-| `synthetic-list-nested.html` | 833.77 | 598.02 | 152.45 |
-| `synthetic-comments-doctype.html` | 1200.72 | 827.66 | 212.09 |
-| `synthetic-template-rich.html` | 628.02 | 444.34 | 134.10 |
-| `synthetic-whitespace-noise.html` | 1104.21 | 919.69 | 170.33 |
-| `synthetic-news-feed.html` | 835.27 | 577.95 | 144.46 |
-| `synthetic-ecommerce.html` | 787.72 | 556.51 | 151.95 |
-| `synthetic-forum-thread.html` | 839.48 | 579.84 | 143.06 |
+| `rust-lang.html` | 2132.70 | 1501.81 | 324.53 |
+| `wiki-html.html` | 1991.85 | 1220.28 | 267.50 |
+| `mdn-html.html` | 2939.75 | 1894.70 | 408.76 |
+| `w3-html52.html` | 956.25 | 754.98 | 196.30 |
+| `hn.html` | 1595.94 | 893.48 | 221.75 |
+| `python-org.html` | 2116.13 | 1354.79 | 280.79 |
+| `kernel-org.html` | 1979.68 | 1335.72 | 290.65 |
+| `gnu-org.html` | 2368.06 | 1490.41 | 313.42 |
+| `ziglang-org.html` | 1874.52 | 1299.04 | 289.84 |
+| `ziglang-doc-master.html` | 1431.90 | 1045.18 | 225.11 |
+| `wikipedia-unicode-list.html` | 1647.71 | 1081.56 | 226.67 |
+| `whatwg-html-spec.html` | 1344.31 | 892.66 | 219.37 |
+| `synthetic-forms.html` | 1396.29 | 781.68 | 189.28 |
+| `synthetic-table-grid.html` | 1086.37 | 724.33 | 169.46 |
+| `synthetic-list-nested.html` | 1190.11 | 652.22 | 161.58 |
+| `synthetic-comments-doctype.html` | 1862.19 | 943.51 | 223.61 |
+| `synthetic-template-rich.html` | 913.72 | 465.79 | 143.20 |
+| `synthetic-whitespace-noise.html` | 1592.74 | 1062.32 | 189.70 |
+| `synthetic-news-feed.html` | 1179.12 | 646.78 | 157.61 |
+| `synthetic-ecommerce.html` | 1134.48 | 637.67 | 163.21 |
+| `synthetic-forum-thread.html` | 1145.80 | 643.29 | 161.14 |
 
 #### Query Match Throughput (ours)
 
 | Case | ours ops/s | ours ns/op |
 |---|---:|---:|
-| `attr-heavy-button` | 1148936.76 | 870.37 |
-| `attr-heavy-nav` | 1130790.00 | 884.34 |
+| `attr-heavy-button` | 191877.12 | 5211.67 |
+| `attr-heavy-nav` | 87885.90 | 11378.39 |
 
 #### Cached Query Throughput (ours)
 
 | Case | ours ops/s | ours ns/op |
 |---|---:|---:|
-| `attr-heavy-button` | 1305257.78 | 766.13 |
-| `attr-heavy-nav` | 1347173.46 | 742.29 |
+| `attr-heavy-button` | 144352.80 | 6927.47 |
+| `attr-heavy-nav` | 120324.49 | 8310.86 |
 
 #### Query Parse Throughput (ours)
 
 | Selector case | Ops/s | ns/op |
 |---|---:|---:|
-| `simple` | 17335919.85 | 57.68 |
-| `complex` | 5836657.49 | 171.33 |
-| `grouped` | 6396371.26 | 156.34 |
+| `simple` | 10465915.34 | 95.55 |
+| `complex` | 4910511.63 | 203.64 |
+| `grouped` | 6290595.08 | 158.97 |
 
 For full per-parser, per-fixture tables and gate output:
 - `bench/results/latest.md`

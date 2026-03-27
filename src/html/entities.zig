@@ -8,7 +8,7 @@ pub const Decoded = struct {
     len: usize,
 
     /// Formats this decoded entity result for human-readable output.
-    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.print(
             "Decoded{{consumed={}, len={}, bytes=[{d},{d},{d},{d}]}}",
             .{ self.consumed, self.len, self.bytes[0], self.bytes[1], self.bytes[2], self.bytes[3] },
