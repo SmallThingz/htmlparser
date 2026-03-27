@@ -1595,6 +1595,20 @@ test "processing-instruction-like nodes end at the next >" {
     try std.testing.expectEqualStrings("p", y.tagName());
 }
 
+test "bang nodes respect quoted > when skipping doctype-like declarations" {
+    const alloc = std.testing.allocator;
+    var doc = Document.init(alloc);
+    defer doc.deinit();
+
+    var html = "<!DOCTYPE html SYSTEM \"a>b\"><div id='x'></div><p id='y'></p>".*;
+    try doc.parse(&html, .{});
+
+    const x = doc.queryOne("div#x") orelse return error.TestUnexpectedResult;
+    const y = doc.queryOne("p#y") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("div", x.tagName());
+    try std.testing.expectEqualStrings("p", y.tagName());
+}
+
 test "attr fast-path names are equivalent to generic lookup semantics" {
     const alloc = std.testing.allocator;
     var doc = Document.init(alloc);

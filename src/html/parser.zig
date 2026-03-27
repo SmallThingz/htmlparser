@@ -453,8 +453,11 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
 
         fn skipBangNode(noalias self: *Self) void {
             self.i += 2;
-            self.i = scanner.findByte(self.input, self.i, '>') orelse self.input.len;
-            if (self.i < self.input.len) self.i += 1;
+            if (scanner.findTagEndRespectQuotes(self.input, self.i)) |tag_end| {
+                self.i = tag_end.gt_index + 1;
+            } else {
+                self.i = self.input.len;
+            }
         }
 
         fn skipPi(noalias self: *Self) void {

@@ -15,11 +15,9 @@ const MaxCollectedAttrs: usize = 24;
 const LocalMatchFrameCap: usize = 48;
 const HashId: u32 = tables.hashIgnoreCaseAscii("id");
 const HashClass: u32 = tables.hashIgnoreCaseAscii("class");
-const EnableQueryAccel = true;
 // Tag-index accel has shown unstable behavior under optimized bench builds.
 // Keep id accel enabled and fall back to scan for tag-only pruning for now.
 const EnableTagQueryAccel = false;
-const EnableMultiAttrCollect = true;
 const isElementLike = common.isElementLike;
 const matchesScopeAnchor = common.matchesScopeAnchor;
 const parentElement = common.parentElement;
@@ -305,7 +303,7 @@ fn firstMatchForGroup(comptime Doc: type, doc: *const Doc, selector: ast.Selecto
     const comp_abs: usize = @intCast(group.compound_start + rightmost);
     const comp = selector.compounds[comp_abs];
 
-    if (EnableQueryAccel and @hasDecl(Doc, "queryAccelLookupId") and comp.hasId()) {
+    if (@hasDecl(Doc, "queryAccelLookupId") and comp.hasId()) {
         const id = comp.id.slice(selector.source);
         switch (doc.queryAccelLookupId(id)) {
             .hit => |idx| {
@@ -320,7 +318,7 @@ fn firstMatchForGroup(comptime Doc: type, doc: *const Doc, selector: ast.Selecto
         }
     }
 
-    if (EnableTagQueryAccel and EnableQueryAccel and @hasDecl(Doc, "queryAccelLookupTag") and comp.hasTag()) {
+    if (EnableTagQueryAccel and @hasDecl(Doc, "queryAccelLookupTag") and comp.hasTag()) {
         const tag = comp.tag.slice(selector.source);
         const tag_key = if (comp.tag_key != 0) comp.tag_key else tags.first8Key(tag);
         switch (doc.queryAccelLookupTag(tag, tag_key)) {
@@ -368,7 +366,7 @@ fn matchesCompound(comptime Doc: type, noalias doc: *const Doc, selector: ast.Se
     // full attribute traversals for the same name.
     var attr_probe: AttrProbe = .{};
     var collected_attrs: CollectedAttrs = .{};
-    const use_collected = EnableMultiAttrCollect and prepareCollectedAttrs(selector, comp, &collected_attrs);
+    const use_collected = prepareCollectedAttrs(selector, comp, &collected_attrs);
     const collected_ptr: ?*CollectedAttrs = if (use_collected) &collected_attrs else null;
 
     if (comp.hasTag()) {
