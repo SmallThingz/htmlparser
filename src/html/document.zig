@@ -9,7 +9,6 @@ const selector_debug = @import("../debug/selector_debug.zig");
 const instrumentation = @import("../debug/instrumentation.zig");
 const parser = @import("parser.zig");
 const node_api = @import("node.zig");
-const tags = @import("tags.zig");
 const common = @import("../common.zig");
 
 // SAFETY: Document owns `source` bytes for the life of nodes/iterators.
@@ -20,11 +19,6 @@ const common = @import("../common.zig");
 pub const InvalidIndex: u32 = common.InvalidIndex;
 const QueryAccelMinBudgetBytes: usize = 4096;
 const QueryAccelBudgetDivisor: usize = 20; // 5%
-
-const IndexSpan = struct {
-    start: u32 = 0,
-    len: u32 = 0,
-};
 
 const QueryAccelIdLookup = union(enum) {
     unavailable,
