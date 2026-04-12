@@ -23,7 +23,9 @@ const prevElementSibling = common.prevElementSibling;
 const nextElementSibling = common.nextElementSibling;
 
 pub const TraversalBounds = struct {
+    /// First node index visited by the traversal.
     start: IndexInt,
+    /// Exclusive end index that terminates the traversal.
     end_excl: IndexInt,
 };
 

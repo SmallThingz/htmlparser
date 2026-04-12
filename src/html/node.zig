@@ -17,6 +17,7 @@ const isElementLike = common.isElementLike;
 
 /// Controls text extraction behavior for `innerText*` APIs.
 pub const TextOptions = struct {
+    /// Collapses runs of HTML whitespace to single spaces when true.
     normalize_whitespace: bool = true,
 
     /// Formats text extraction options for human-readable output.

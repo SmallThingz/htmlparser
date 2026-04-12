@@ -20,19 +20,27 @@ pub const RawKind = enum {
 };
 
 pub const RawValue = struct {
+    /// Raw value encoding detected at parse time.
     kind: RawKind,
+    /// Inclusive start byte offset of the raw value payload.
     start: usize,
+    /// Exclusive end byte offset of the raw value payload.
     end: usize,
+    /// Next scan cursor after this raw value.
     next_start: usize,
 };
 
 pub const ParsedValue = struct {
+    /// Borrowed parsed attribute value bytes.
     value: []const u8,
+    /// Next scan cursor after this parsed value.
     next_start: usize,
 };
 
 pub const ScanAttrNameResult = struct {
+    /// Parsed attribute name, `null` at tag terminator, or `""` when one byte was skipped.
     name: ?[]const u8,
+    /// Next scan cursor after the attribute name or skipped byte.
     next_start: usize,
 };
 

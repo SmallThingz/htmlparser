@@ -43,9 +43,11 @@ const isElementLike = common.isElementLike;
 
 /// Compile-time parser options and type factory for generated public API types.
 pub const ParseOptions = struct {
-    // In fastest-mode style runs, whitespace-only text nodes can be dropped.
+    /// Drops whitespace-only text nodes during parse when throughput matters more
+    /// than preserving indentation-only text nodes.
     drop_whitespace_text_nodes: bool = true,
-    // Preserves caller bytes by parsing a private writable shadow copy.
+    /// Preserves caller bytes by parsing a private writable shadow copy.
+    /// This is off by default so the destructive hot path stays unchanged.
     non_destructive: bool = false,
 
     /// Formats parse options for human-readable output.
@@ -60,18 +62,24 @@ pub const ParseOptions = struct {
     pub fn GetNodeRaw(_: @This()) type {
         return struct {
             //! Backing node storage record for parsed DOM state.
+            /// Stored node kind.
             kind: NodeType,
 
+            /// Tag-name span for elements or text span for text nodes.
             name_or_text: Span = .{},
 
-            // Attribute bytes begin at `name_or_text.end` for element nodes and
-            // end at `attr_end`.
+            /// End of the raw attribute byte span for element nodes.
+            /// Attribute bytes begin at `name_or_text.end`.
             attr_end: IndexInt = 0,
 
-            last_child: IndexInt = InvalidIndex, // first_child can be derived from the index of this node
-            prev_sibling: IndexInt = InvalidIndex, // next_sibling can be derived form subtree_end
+            /// Last direct child index. The first child is derived from `index + 1`.
+            last_child: IndexInt = InvalidIndex,
+            /// Previous sibling index. The next sibling is derived from `subtree_end + 1`.
+            prev_sibling: IndexInt = InvalidIndex,
+            /// Parent node index.
             parent: IndexInt = InvalidIndex,
 
+            /// Inclusive subtree tail index for fast descendant skipping.
             subtree_end: IndexInt = 0,
         };
     }
@@ -79,8 +87,11 @@ pub const ParseOptions = struct {
     /// Returns the parser's open-element stack entry type.
     pub fn GetOpenElem(_: @This()) type {
         return struct {
+            /// First-8-bytes lowercase key for the open tag name.
             tag_key: u64 = 0,
+            /// Node index of the open element.
             idx: IndexInt,
+            /// Original tag-name length for close matching and optional-close logic.
             tag_len: u16 = 0,
         };
     }
@@ -94,7 +105,9 @@ pub const ParseOptions = struct {
             const DebugQueryResultType = options.QueryDebugResult();
             const QueryIterType = options.QueryIter();
 
+            /// Owning document pointer.
             doc: *DocType,
+            /// Backing node index inside `doc.nodes`.
             index: IndexInt,
 
             /// Returns the underlying raw node record.
@@ -230,10 +243,15 @@ pub const ParseOptions = struct {
             const DocType = options.GetDocument();
             const NodeTypeWrapper = options.GetNode();
 
+            /// Owning document pointer.
             doc: *DocType,
+            /// Selector evaluated by this iterator.
             selector: ast.Selector,
+            /// Optional subtree root for scoped queries.
             scope_root: IndexInt = InvalidIndex,
+            /// Next node index to test.
             next_index: IndexInt = 1,
+            /// Generation token used to invalidate runtime iterators safely.
             runtime_generation: u64 = 0,
 
             /// Returns next matching node or `null` when exhausted.
@@ -275,8 +293,11 @@ pub const ParseOptions = struct {
     /// Returns the structured result type for debug query helpers.
     pub fn QueryDebugResult(options: @This()) type {
         return struct {
+            /// First matching node, if any.
             node: ?options.GetNode() = null,
+            /// Detailed mismatch diagnostics for the attempted query.
             report: selector_debug.QueryDebugReport = .{},
+            /// Runtime parse error, if selector compilation failed.
             err: ?runtime_selector.Error = null,
         };
     }
@@ -288,7 +309,9 @@ pub const ParseOptions = struct {
             const DocType = options.GetDocument();
             const NodeTypeWrapper = options.GetNode();
 
+            /// Owning document pointer.
             doc: *const DocType,
+            /// Next direct child index to yield.
             next_idx: IndexInt = InvalidIndex,
 
             /// Returns next wrapped child node or `null` when exhausted.
@@ -337,24 +360,40 @@ pub const ParseOptions = struct {
             const NodeTypeWrapper = options.GetNode();
             const QueryIterType = options.QueryIter();
 
+            /// Allocator used for node storage, selector arenas, and optional shadow copies.
             allocator: std.mem.Allocator,
+            /// Mutable working buffer used by the parser and lazy decode paths.
             source: []u8 = &[_]u8{},
+            /// Original caller bytes preserved for exact whole-document formatting.
             original_source: []const u8 = &[_]u8{},
+            /// Owned shadow buffer allocated only in non-destructive mode.
             owned_shadow_source: ?[]u8 = null,
+            /// True when `source` is a private shadow copy rather than caller memory.
             parse_is_non_destructive: bool = false,
 
+            /// Parsed node storage.
             nodes: std.ArrayListUnmanaged(RawNodeType) = .empty,
+            /// Open-element stack used during parse.
             parse_stack: std.ArrayListUnmanaged(OpenElemType) = .empty,
 
+            /// Arena for `queryOneRuntime` selector compilation.
             query_one_arena: ?std.heap.ArenaAllocator = null,
+            /// Arena for `queryAllRuntime` selector compilation.
             query_all_arena: ?std.heap.ArenaAllocator = null,
+            /// Monotonic generation counter for runtime iterator invalidation.
             query_all_generation: u64 = 1,
 
+            /// Soft memory budget for query acceleration indexes.
             query_accel_budget_bytes: usize = 0,
+            /// Bytes currently reserved by acceleration structures.
             query_accel_used_bytes: usize = 0,
+            /// True once the acceleration budget has been exhausted.
             query_accel_budget_exhausted: bool = false,
+            /// True once the id index has been built successfully.
             query_accel_id_built: bool = false,
+            /// True once the id index has been disabled for correctness or budget reasons.
             query_accel_id_disabled: bool = false,
+            /// Hash map used by the optional id acceleration path.
             query_accel_id_map: std.AutoHashMapUnmanaged(u64, IndexInt) = .{},
 
             /// Initializes an empty document using `allocator` for internal storage.
@@ -785,7 +824,9 @@ pub const ParseOptions = struct {
 pub const TextOptions = node_api.TextOptions;
 
 const ParseInputSlices = struct {
+    /// Caller-owned source bytes.
     original: []const u8,
+    /// Mutable view for destructive parsing, when available.
     mutable: ?[]u8,
 };
 
@@ -820,7 +861,9 @@ fn getParseInputSlices(input: anytype) ParseInputSlices {
 
 /// Inclusive-exclusive byte span into the document source buffer.
 pub const Span = struct {
+    /// Inclusive start byte offset in the document source.
     start: IndexInt = 0,
+    /// Exclusive end byte offset in the document source.
     end: IndexInt = 0,
 
     /// Returns the span length in bytes.

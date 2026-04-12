@@ -3,8 +3,11 @@ const scanner = @import("scanner.zig");
 
 /// Result of decoding one HTML entity prefix.
 pub const Decoded = struct {
+    /// Number of source bytes consumed from the entity prefix.
     consumed: usize,
+    /// UTF-8 bytes produced by the decode.
     bytes: [4]u8,
+    /// Number of valid bytes in `bytes`.
     len: usize,
 
     /// Formats this decoded entity result for human-readable output.

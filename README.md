@@ -1,6 +1,6 @@
-# 🚀 zhtml
+# zhtml
 
-High-throughput, destructive HTML parser + CSS selector engine for Zig.
+High-throughput HTML parser + CSS selector engine for Zig.
 
 [![zig](https://img.shields.io/badge/zig-0.16.0--dev-orange)](https://ziglang.org/)
 [![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
@@ -24,9 +24,9 @@ Source: `bench/results/latest.json` (`stable` profile).
 ### Parse Throughput (Average Across Fixtures)
 
 ```text
-ours     │████████████████████│ 1588.89 MB/s (100.00%)
-lol-html │████████████░░░░░░░░│ 950.93 MB/s (59.85%)
-lexbor   │███░░░░░░░░░░░░░░░░░│ 225.33 MB/s (14.18%)
+ours     │████████████████████│ 1593.70 MB/s (100.00%)
+lol-html │████████████░░░░░░░░│ 965.40 MB/s (60.58%)
+lexbor   │███░░░░░░░░░░░░░░░░░│ 215.88 MB/s (13.55%)
 ```
 
 ### Conformance Snapshot
@@ -45,7 +45,7 @@ Source: `bench/results/external_suite_report.json`
 - 💤 Lazy decode/normalize path: attribute/entity decode and text normalization happen on query-time APIs.
 - 🧪 Debug tooling: selector mismatch diagnostics and instrumentation wrappers.
 - 🧰 Parse profiles: `strictest` and `fastest` option bundles for benchmarks/workloads.
-- 🧵 Mutable-input parser model optimized for throughput.
+- 🧵 Destructive parsing by default for throughput, with an opt-in non-destructive shadow-buffer mode.
 
 ## 🚀 Quick Start
 
@@ -67,12 +67,21 @@ test "basic parse + query" {
 }
 ```
 
+`doc.parse` is destructive by default and mutates the input buffer for speed. Use `.non_destructive = true` when the caller bytes must remain unchanged, including file-backed memory maps.
+
+## ⚙️ Build Configuration
+
+- `-Dintlen=u16|u32|u64|usize` selects the integer width used for document spans and node indexes.
+- Smaller widths reduce memory use but also reduce the maximum parseable input size.
+- `u32` is the default. Use `u64` for multi-gigabyte inputs.
+
 ## 📚 Documentation
 
 - Full manual: [Documentation](./DOCUMENTATION.md)
 - API details: [Documentation#core-api](./DOCUMENTATION.md#core-api)
 - Selector grammar: [Documentation#selector-support](./DOCUMENTATION.md#selector-support)
 - Parse mode guidance: [Documentation#mode-guidance](./DOCUMENTATION.md#mode-guidance)
+- Non-destructive parsing: [Documentation#non-destructive-parsing](./DOCUMENTATION.md#non-destructive-parsing)
 - Conformance: [Documentation#conformance-status](./DOCUMENTATION.md#conformance-status)
 - Architecture: [Documentation#architecture](./DOCUMENTATION.md#architecture)
 - Troubleshooting: [Documentation#troubleshooting](./DOCUMENTATION.md#troubleshooting)
@@ -93,6 +102,7 @@ zig build ship-check
 - `examples/cached_selector.zig`
 - `examples/query_time_decode.zig`
 - `examples/inner_text_options.zig`
+- `examples/non_destructive_parse.zig`
 
 ## 📜 License
 

@@ -49,9 +49,13 @@ pub const DebugFailureKind = enum(u8) {
 
 /// First failing predicate metadata for a candidate node.
 pub const Failure = struct {
+    /// Category of the first failing selector predicate.
     kind: DebugFailureKind = .none,
+    /// Comma-group index containing the first failure.
     group_index: u16 = InvalidSmall,
+    /// Compound index inside the group containing the first failure.
     compound_index: u16 = InvalidSmall,
+    /// Predicate index inside the compound causing the first failure.
     predicate_index: u16 = InvalidSmall,
 
     /// Returns true when this failure slot is unset.
@@ -72,7 +76,9 @@ pub const Failure = struct {
 
 /// Single non-matching node with its first failure reason.
 pub const NearMiss = struct {
+    /// Candidate node that almost matched.
     node_index: IndexInt = InvalidIndex,
+    /// Metadata describing the first predicate that rejected this node.
     reason: Failure = .{},
 
     /// Formats this near-miss record for human-readable output.
@@ -85,18 +91,29 @@ pub const NearMiss = struct {
 
 /// Fixed-capacity diagnostic report filled by debug query APIs.
 pub const QueryDebugReport = struct {
+    /// Original selector source string used for this query run.
     selector_source: []const u8 = "",
+    /// Root index used for scoped matching, or `InvalidIndex` for whole-document queries.
     scope_root: IndexInt = InvalidIndex,
+    /// Number of element candidates visited during matching.
     visited_elements: IndexInt = 0,
+    /// First matching node index, or `InvalidIndex` when nothing matched.
     matched_index: IndexInt = InvalidIndex,
+    /// Group index that matched, when a match was found.
     matched_group: u16 = InvalidSmall,
+    /// True when runtime selector parsing failed before matching started.
     runtime_parse_error: bool = false,
 
+    /// Number of comma-separated selector groups compiled from the query.
     group_count: u8 = 0,
+    /// Candidate counts evaluated for each selector group.
     group_eval_counts: [MaxSelectorGroups]IndexInt = [_]IndexInt{0} ** MaxSelectorGroups,
+    /// Match counts produced by each selector group.
     group_match_counts: [MaxSelectorGroups]IndexInt = [_]IndexInt{0} ** MaxSelectorGroups,
 
+    /// Number of populated entries in `near_misses`.
     near_miss_len: u8 = 0,
+    /// Sampled near-miss candidates retained for diagnostics.
     near_misses: [MaxNearMisses]NearMiss = [_]NearMiss{.{}} ** MaxNearMisses,
 
     /// Resets report state before a debug query run.

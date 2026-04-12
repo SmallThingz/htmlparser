@@ -7,7 +7,9 @@ const tables = @import("tables.zig");
 
 /// Result of scanning to a tag end while respecting quoted attributes.
 pub const TagEnd = struct {
+    /// Index of the closing `>` byte.
     gt_index: usize,
+    /// End of the raw attribute region immediately before `>` or `/>`.
     attr_end: usize,
 
     /// Formats this tag end summary for human-readable output.
@@ -18,7 +20,9 @@ pub const TagEnd = struct {
 
 /// Result of scanning a text run up to the next `<`.
 pub const TextRun = struct {
+    /// Index of the next `<`, or `hay.len` when none exists.
     lt_index: usize,
+    /// True when the scanned run contained any non-whitespace byte.
     has_non_whitespace: bool,
 };
 

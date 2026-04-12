@@ -35,7 +35,9 @@ pub const AttrOp = enum(u8) {
 
 /// Source byte range pointing into selector text.
 pub const Range = extern struct {
+    /// Starting byte offset into selector source.
     start: Int = 0,
+    /// Number of bytes covered by this range.
     len: Int = 0,
 
     /// Returns empty range.
@@ -71,9 +73,13 @@ pub const Range = extern struct {
 
 /// One parsed attribute selector predicate.
 pub const AttrSelector = extern struct {
+    /// Attribute name span inside selector source.
     name: Range,
+    /// Prehashed lowercase attribute name for fast matching.
     name_hash: u32 = 0,
+    /// Comparison operator for this attribute predicate.
     op: AttrOp = .exists,
+    /// Optional attribute value span used by non-`exists` operators.
     value: Range = .{},
 
     /// Formats this attribute selector for human-readable output.
@@ -88,8 +94,9 @@ pub const AttrSelector = extern struct {
 
 /// Parsed `An+B` expression for `:nth-child`.
 pub const NthExpr = extern struct {
-    // Matches values where index = a*n + b, n >= 0, index is 1-based.
+    /// Coefficient `A` in `An+B`.
     a: i32,
+    /// Constant term `B` in `An+B`.
     b: i32,
 
     /// Evaluates this expression for a 1-based child index.
@@ -122,7 +129,9 @@ pub const PseudoKind = enum(u8) {
 
 /// One parsed pseudo predicate.
 pub const Pseudo = extern struct {
+    /// Pseudo-class kind.
     kind: PseudoKind,
+    /// `:nth-child` payload; ignored by non-nth pseudos.
     nth: NthExpr = .{ .a = 0, .b = 1 },
 
     /// Formats this pseudo selector for human-readable output.
@@ -148,8 +157,11 @@ pub const NotKind = enum(u8) {
 
 /// One parsed simple `:not(...)` predicate.
 pub const NotSimple = extern struct {
+    /// Simple-selector kind wrapped by `:not(...)`.
     kind: NotKind,
+    /// Source span for tag/id/class payloads.
     text: Range = .{},
+    /// Parsed attribute payload when `kind == .attr`.
     attr: AttrSelector = .{ .name = .{}, .op = .exists, .value = .{} },
 
     /// Formats this `:not` predicate for human-readable output.
@@ -164,22 +176,34 @@ pub const NotSimple = extern struct {
 
 /// One selector compound (tag/id/class/attr/pseudo/not + combinator).
 pub const Compound = extern struct {
+    /// Relationship to the compound immediately on the left.
     combinator: Combinator = .none,
 
+    /// Optional tag-name payload.
     tag: Range = .{},
+    /// Cached lowercase first-8-byte key for `tag`.
     tag_key: u64 = 0,
+    /// Optional `#id` payload.
     id: Range = .{},
 
+    /// Start index into `Selector.classes`.
     class_start: Int = 0,
+    /// Number of class predicates in this compound.
     class_len: Int = 0,
 
+    /// Start index into `Selector.attrs`.
     attr_start: Int = 0,
+    /// Number of attribute predicates in this compound.
     attr_len: Int = 0,
 
+    /// Start index into `Selector.pseudos`.
     pseudo_start: Int = 0,
+    /// Number of pseudo-class predicates in this compound.
     pseudo_len: Int = 0,
 
+    /// Start index into `Selector.not_items`.
     not_start: Int = 0,
+    /// Number of `:not(...)` predicates in this compound.
     not_len: Int = 0,
 
     pub fn hasTag(self: @This()) bool {
@@ -214,7 +238,9 @@ pub const Compound = extern struct {
 
 /// One comma-separated selector group.
 pub const Group = extern struct {
+    /// Start index into `Selector.compounds`.
     compound_start: Int,
+    /// Number of compounds in this selector group.
     compound_len: Int,
 
     /// Formats this selector group for human-readable output.
@@ -225,12 +251,19 @@ pub const Group = extern struct {
 
 /// Compiled selector used by matcher/query APIs.
 pub const Selector = struct {
+    /// Owned or borrowed selector source text.
     source: []const u8,
+    /// Comma-separated selector groups.
     groups: []const Group,
+    /// Flattened compound list referenced by `groups`.
     compounds: []const Compound,
+    /// Flattened class selector payloads referenced by compounds.
     classes: []const Range,
+    /// Flattened attribute selector payloads referenced by compounds.
     attrs: []const AttrSelector,
+    /// Flattened pseudo selector payloads referenced by compounds.
     pseudos: []const Pseudo,
+    /// Flattened `:not(...)` payloads referenced by compounds.
     not_items: []const NotSimple,
 
     /// Compiles a selector at comptime with compile-time diagnostics.

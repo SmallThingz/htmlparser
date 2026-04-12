@@ -7,6 +7,7 @@ This is the canonical manual for usage, API, selector behavior, performance work
 - [Requirements](#requirements)
 - [Quick Start](#quick-start)
 - [Core API](#core-api)
+- [Non-Destructive Parsing](#non-destructive-parsing)
 - [Selector Support](#selector-support)
 - [Mode Guidance](#mode-guidance)
 - [Performance and Benchmarks](#performance-and-benchmarks)
@@ -17,8 +18,9 @@ This is the canonical manual for usage, API, selector behavior, performance work
 
 ## Requirements
 
-- Zig `0.16.0-dev.2984+cb7d2b056`
-- Mutable input buffers (`[]u8`) for parsing
+- Zig `0.16.0-dev.3013+abd131e33`
+- Mutable input buffers (`[]u8`) for destructive parsing
+- `[]const u8` inputs are supported when `ParseOptions.non_destructive = true`
 
 ## Quick Start
 
@@ -56,7 +58,10 @@ All examples are verified by running `zig build examples-check`
 - `Document.init(allocator)`
 - `doc.deinit()`
 - `doc.clear()`
-- `doc.parse(input: []u8, comptime opts: ParseOptions)`
+- `doc.parse(input, comptime opts: ParseOptions)`
+- destructive mode accepts mutable input and parses it in place
+- non-destructive mode accepts mutable or read-only input and parses a private shadow copy
+- maximum parseable input size is controlled at build time with `-Dintlen`
 
 ### Query APIs
 
@@ -67,12 +72,13 @@ All examples are verified by running `zig build examples-check`
   - `try doc.queryOneRuntime(selector)`
   - `try doc.queryAllRuntime(selector)`
 - Cached runtime selectors:
-  - `doc.queryOneCached(&selector)`
-  - `doc.queryAllCached(&selector)`
+  - `doc.queryOneCached(selector)`
+  - `doc.queryAllCached(selector)`
   - selector created via `try Selector.compileRuntime(allocator, source)`
 - Diagnostics:
-  - `doc.queryOneDebug(comptime selector, report)`
-  - `try doc.queryOneRuntimeDebug(selector, report)`
+  - `doc.queryOneDebug(comptime selector)`
+  - `doc.queryOneRuntimeDebug(selector)`
+  - both return `{ node, report, err }`
 
 ### Node APIs
 
@@ -102,13 +108,48 @@ All examples are verified by running `zig build examples-check`
 ### Parse/Text options
 
 - `ParseOptions`
-  - `eager_child_views: bool = true`
-  - `drop_whitespace_text_nodes: bool = false`
+  - `drop_whitespace_text_nodes: bool = true`
+  - `non_destructive: bool = false`
+- build option:
+  - `-Dintlen=u16|u32|u64|usize`
+  - controls the integer width used for source spans and node indexes
+  - too-small widths fail fast with `error.InputTooLarge`
 - `TextOptions`
   - `normalize_whitespace: bool = true`
 - parse/query work split:
   - parse keeps raw text and attribute spans in-place
   - entity decode and whitespace normalization are applied by query-time APIs (`getAttributeValue`, `innerText*`, selector attribute predicates)
+
+### Design Notes
+
+- destructive parsing is the default because the parser and lazy decode paths mutate source bytes in place for throughput
+- non-destructive parsing pays for one private writable shadow copy per parse so the in-place parser core does not need a separate slow path
+- nodes are stored in one contiguous array and linked by indexes rather than pointers to keep traversal cache-friendly and make `-Dintlen` effective
+- attribute storage stays span-based instead of building heap objects so parse cost scales with actual queries, not attribute count
+- query-time decoding keeps parse throughput high by avoiding eager entity decode and whitespace normalization for bytes that may never be read
+
+## Non-Destructive Parsing
+
+Use non-destructive mode when the caller bytes must remain unchanged.
+
+```zig
+const html_bytes = "<div id='x' data-v='a&amp;b'> hi &amp; bye </div>";
+try doc.parse(html_bytes, .{ .non_destructive = true });
+```
+
+Behavior:
+
+- the default destructive path is unchanged and still parses caller memory directly
+- non-destructive mode allocates one writable shadow buffer per `parse` call
+- lazy decode and normalization mutate only the shadow buffer, never the caller bytes
+- `Document.writeHtml` and `Document.format` return the exact original source bytes in non-destructive mode
+- node-level formatting still serializes from parsed state rather than replaying original source slices
+
+Use cases:
+
+- parsing file-backed memory maps
+- preserving original bytes for hashing, diffing, or cache keys
+- running parser queries without allowing in-place mutation of shared buffers
 
 ### Instrumentation wrappers
 
@@ -151,8 +192,9 @@ Compilation modes:
 
 | Mode | Parse Options | Best For | Tradeoffs |
 |---|---|---|---|
-| `strictest` | `.eager_child_views = true`, `.drop_whitespace_text_nodes = false` | traversal predictability and text fidelity | higher parse-time work |
-| `fastest` | `.eager_child_views = false`, `.drop_whitespace_text_nodes = true` | throughput-first scraping | whitespace-only text nodes dropped; child views built lazily |
+| `strictest` | `.drop_whitespace_text_nodes = false` | traversal predictability and text fidelity | keeps whitespace-only text nodes |
+| `fastest` | `.drop_whitespace_text_nodes = true` | throughput-first scraping | whitespace-only text nodes dropped |
+| `non-destructive` | `.non_destructive = true` plus either profile above | preserving input bytes, memory maps, exact whole-document formatting | one full input copy per parse |
 
 Fallback playbook:
 
@@ -193,49 +235,49 @@ Source: `bench/results/latest.json` (`stable` profile).
 
 | Fixture | ours | lol-html | lexbor |
 |---|---:|---:|---:|
-| `rust-lang.html` | 2124.97 | 801.16 | 323.63 |
-| `wiki-html.html` | 1748.06 | 1186.82 | 263.60 |
-| `mdn-html.html` | 2993.42 | 1815.62 | 398.56 |
-| `w3-html52.html` | 974.07 | 741.27 | 192.43 |
-| `hn.html` | 1550.52 | 869.40 | 216.62 |
-| `python-org.html` | 2081.63 | 1304.94 | 274.35 |
-| `kernel-org.html` | 1981.37 | 1303.81 | 284.72 |
-| `gnu-org.html` | 2401.47 | 1444.13 | 306.67 |
-| `ziglang-org.html` | 2039.74 | 1267.60 | 285.58 |
-| `ziglang-doc-master.html` | 1386.53 | 1013.46 | 221.28 |
-| `wikipedia-unicode-list.html` | 1628.86 | 1039.14 | 221.72 |
-| `whatwg-html-spec.html` | 1320.16 | 872.68 | 217.95 |
-| `synthetic-forms.html` | 1395.06 | 758.12 | 185.42 |
-| `synthetic-table-grid.html` | 1059.29 | 698.14 | 165.95 |
-| `synthetic-list-nested.html` | 1145.71 | 625.10 | 158.75 |
-| `synthetic-comments-doctype.html` | 1807.36 | 895.79 | 217.90 |
-| `synthetic-template-rich.html` | 865.06 | 453.51 | 140.55 |
-| `synthetic-whitespace-noise.html` | 1458.04 | 1016.04 | 184.45 |
-| `synthetic-news-feed.html` | 1150.04 | 621.22 | 154.10 |
-| `synthetic-ecommerce.html` | 1115.61 | 617.51 | 159.84 |
-| `synthetic-forum-thread.html` | 1139.72 | 624.18 | 157.97 |
+| `rust-lang.html` | 2257.75 | 1470.03 | 216.04 |
+| `wiki-html.html` | 1785.43 | 1166.84 | 256.33 |
+| `mdn-html.html` | 3010.28 | 1792.72 | 393.27 |
+| `w3-html52.html` | 992.86 | 728.29 | 188.38 |
+| `hn.html` | 1530.30 | 855.35 | 210.08 |
+| `python-org.html` | 2035.85 | 1280.26 | 270.66 |
+| `kernel-org.html` | 1976.02 | 1282.78 | 277.88 |
+| `gnu-org.html` | 2406.24 | 1401.98 | 302.45 |
+| `ziglang-org.html` | 2017.94 | 1220.23 | 279.36 |
+| `ziglang-doc-master.html` | 1378.79 | 998.22 | 218.19 |
+| `wikipedia-unicode-list.html` | 1609.85 | 1039.85 | 217.28 |
+| `whatwg-html-spec.html` | 1323.46 | 851.84 | 215.36 |
+| `synthetic-forms.html` | 1379.57 | 728.61 | 181.08 |
+| `synthetic-table-grid.html` | 1081.59 | 678.24 | 162.10 |
+| `synthetic-list-nested.html` | 1184.73 | 618.23 | 155.30 |
+| `synthetic-comments-doctype.html` | 1796.81 | 885.58 | 213.86 |
+| `synthetic-template-rich.html` | 894.29 | 449.64 | 137.91 |
+| `synthetic-whitespace-noise.html` | 1433.10 | 1004.43 | 179.22 |
+| `synthetic-news-feed.html` | 1140.39 | 615.10 | 150.06 |
+| `synthetic-ecommerce.html` | 1050.46 | 598.30 | 154.63 |
+| `synthetic-forum-thread.html` | 1182.01 | 606.82 | 154.11 |
 
 #### Query Match Throughput (ours)
 
 | Case | ours ops/s | ours ns/op |
 |---|---:|---:|
-| `attr-heavy-button` | 143231.07 | 6981.73 |
-| `attr-heavy-nav` | 96598.54 | 10352.12 |
+| `attr-heavy-button` | 156194.25 | 6402.28 |
+| `attr-heavy-nav` | 83862.90 | 11924.22 |
 
 #### Cached Query Throughput (ours)
 
 | Case | ours ops/s | ours ns/op |
 |---|---:|---:|
-| `attr-heavy-button` | 154529.03 | 6471.28 |
-| `attr-heavy-nav` | 114815.30 | 8709.64 |
+| `attr-heavy-button` | 157255.50 | 6359.08 |
+| `attr-heavy-nav` | 112678.84 | 8874.78 |
 
 #### Query Parse Throughput (ours)
 
 | Selector case | Ops/s | ns/op |
 |---|---:|---:|
-| `simple` | 10316641.45 | 96.93 |
-| `complex` | 4859071.50 | 205.80 |
-| `grouped` | 5679185.67 | 176.08 |
+| `simple` | 9998220.32 | 100.02 |
+| `complex` | 4751822.53 | 210.45 |
+| `grouped` | 6086328.27 | 164.30 |
 
 For full per-parser, per-fixture tables and gate output:
 - `bench/results/latest.md`
@@ -277,9 +319,11 @@ Core modules:
 
 Data model highlights:
 
-- `Document` owns source bytes and node/index storage
+- `Document` always owns node/index storage and may either borrow caller bytes directly or own a shadow parse buffer
 - nodes are contiguous and linked by indexes for traversal
 - attributes are traversed directly from source spans (no heap attribute objects)
+- the build-time `-Dintlen` option widens or shrinks those spans and indexes uniformly
+- destructive mode is the performance baseline; non-destructive mode exists as an opt-in isolation boundary
 
 ## Troubleshooting
 
@@ -303,3 +347,5 @@ Data model highlights:
 ### Input buffer changed
 
 Expected: parse and lazy decode paths mutate source bytes in place.
+
+If the bytes must not change, parse with `.non_destructive = true`.

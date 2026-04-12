@@ -5,6 +5,7 @@ const test_helpers = @import("test_helpers.zig");
 
 /// Allocator facade that allows selector compilation during comptime execution.
 pub const ComptimeAllocator = struct {
+    /// Allocator interface forwarded into the runtime selector compiler at comptime.
     pub const interface: std.mem.Allocator = .{
         .ptr = undefined,
         .vtable = &.{

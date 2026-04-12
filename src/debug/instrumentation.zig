@@ -17,8 +17,11 @@ pub const QueryInstrumentationKind = enum(u8) {
 
 /// Timing/count payload emitted after `parseWithHooks`.
 pub const ParseInstrumentationStats = struct {
+    /// End-to-end parse duration in nanoseconds.
     elapsed_ns: u64,
+    /// Input byte length passed to `parseWithHooks`.
     input_len: usize,
+    /// Total node count produced by the parse.
     node_count: usize,
 
     /// Formats parse timing statistics for human-readable output.
@@ -33,9 +36,13 @@ pub const ParseInstrumentationStats = struct {
 
 /// Timing payload emitted after query hook wrappers.
 pub const QueryInstrumentationStats = struct {
+    /// End-to-end query duration in nanoseconds.
     elapsed_ns: u64,
+    /// Selector source length in bytes.
     selector_len: usize,
+    /// Query operation kind that was measured.
     kind: QueryInstrumentationKind,
+    /// Match result when the wrapper returns an immediate optional result.
     matched: ?bool = null,
 
     /// Formats query timing statistics for human-readable output.
