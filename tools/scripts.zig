@@ -10,7 +10,7 @@ const FIXTURES_DIR = "bench/fixtures";
 const PARSERS_DIR = "bench/parsers";
 const CONFORMANCE_CASES_DIR = "bench/conformance_cases";
 const SUITES_CACHE_DIR = "bench/.cache/suites";
-const SUITES_DIR = "/tmp/htmlparser-suites";
+const SUITES_DIR = "/tmp/html-suites";
 const SUITE_RUNNER_BIN = "bench/build/bin/suite_runner";
 
 const repeats: usize = 5;
@@ -229,7 +229,7 @@ fn setupFixtures(io: std.Io, alloc: std.mem.Allocator, refresh: bool) !void {
             "--retry-delay",
             "1",
             "-A",
-            "htmlparser-bench/1.0 (+https://example.invalid)",
+            "html-bench/1.0 (+https://example.invalid)",
             item.url,
             "-o",
             target,
@@ -374,7 +374,7 @@ fn runnerCmdParse(alloc: std.mem.Allocator, parser_name: []const u8, fixture: []
     const iter_s = try std.fmt.allocPrint(alloc, "{d}", .{iterations});
     if (std.mem.eql(u8, parser_name, "ours")) {
         const argv = try alloc.alloc([]const u8, 5);
-        argv[0] = "zig-out/bin/htmlparser-bench";
+        argv[0] = "zig-out/bin/html-bench";
         argv[1] = "parse";
         argv[2] = "fastest";
         argv[3] = fixture;
@@ -505,13 +505,13 @@ fn benchQueryParseOne(io: std.Io, alloc: std.mem.Allocator, parser_name: []const
     defer alloc.free(iter_s);
 
     {
-        const warm = [_][]const u8{ "zig-out/bin/htmlparser-bench", "query-parse", selector, "1" };
+        const warm = [_][]const u8{ "zig-out/bin/html-bench", "query-parse", selector, "1" };
         _ = try runIntCmd(io, alloc, &warm);
     }
 
     const samples = try alloc.alloc(u64, repeats);
     for (samples) |*slot| {
-        const argv = [_][]const u8{ "zig-out/bin/htmlparser-bench", "query-parse", selector, iter_s };
+        const argv = [_][]const u8{ "zig-out/bin/html-bench", "query-parse", selector, iter_s };
         slot.* = try runIntCmd(io, alloc, &argv);
     }
 
@@ -539,13 +539,13 @@ fn benchQueryExecOne(io: std.Io, alloc: std.mem.Allocator, parser_name: []const 
     const sub = if (cached) "query-cached" else "query-match";
 
     {
-        const warm = [_][]const u8{ "zig-out/bin/htmlparser-bench", sub, mode, fixture, selector, "1" };
+        const warm = [_][]const u8{ "zig-out/bin/html-bench", sub, mode, fixture, selector, "1" };
         _ = try runIntCmd(io, alloc, &warm);
     }
 
     const samples = try alloc.alloc(u64, repeats);
     for (samples) |*slot| {
-        const argv = [_][]const u8{ "zig-out/bin/htmlparser-bench", sub, mode, fixture, selector, iter_s };
+        const argv = [_][]const u8{ "zig-out/bin/html-bench", sub, mode, fixture, selector, iter_s };
         slot.* = try runIntCmd(io, alloc, &argv);
     }
     const median_ns = try common.medianU64(alloc, samples);
@@ -1641,7 +1641,7 @@ fn ensureSuites(io: std.Io, alloc: std.mem.Allocator) !void {
 fn buildSuiteRunner(io: std.Io, alloc: std.mem.Allocator) !void {
     try common.ensureDir(io, BIN_DIR);
     const root_mod = "-Mroot=tools/suite_runner.zig";
-    const html_mod = "-Mhtmlparser=src/root.zig";
+    const html_mod = "-Mhtml=src/root.zig";
     const config_path = try tempConfigModule(io, alloc);
     defer {
         std.Io.Dir.deleteFileAbsolute(io, config_path) catch {};
@@ -1653,7 +1653,7 @@ fn buildSuiteRunner(io: std.Io, alloc: std.mem.Allocator) !void {
         "zig",
         "build-exe",
         "--dep",
-        "htmlparser",
+        "html",
         root_mod,
         "--dep",
         "config",
@@ -1668,7 +1668,7 @@ fn buildSuiteRunner(io: std.Io, alloc: std.mem.Allocator) !void {
 
 fn tempConfigModule(io: std.Io, alloc: std.mem.Allocator) ![]u8 {
     var src: std.Random.IoSource = .{ .io = io };
-    const path = try std.fmt.allocPrint(alloc, "/tmp/htmlparser-config-{x}.zig", .{src.interface().int(u64)});
+    const path = try std.fmt.allocPrint(alloc, "/tmp/html-config-{x}.zig", .{src.interface().int(u64)});
     errdefer alloc.free(path);
 
     const file = try std.Io.Dir.createFileAbsolute(io, path, .{
@@ -1713,7 +1713,7 @@ fn tempHtmlFile(io: std.Io, alloc: std.mem.Allocator, html: []const u8) ![]u8 {
     var src: std.Random.IoSource = .{ .io = io };
     const rng = src.interface();
     const r = rng.int(u64);
-    const path = try std.fmt.allocPrint(alloc, "/tmp/htmlparser-suite-{x}.html", .{r});
+    const path = try std.fmt.allocPrint(alloc, "/tmp/html-suite-{x}.html", .{r});
     const f = try std.Io.Dir.createFileAbsolute(io, path, .{ .truncate = true });
     defer f.close(io);
     try f.writeStreamingAll(io, html);
@@ -2766,12 +2766,12 @@ fn runExamplesCheck(io: std.Io, alloc: std.mem.Allocator) !void {
         std.debug.print("examples-check: zig test {s}\n", .{example_path});
         const root_mod = try std.fmt.allocPrint(alloc, "-Mroot={s}", .{example_path});
         defer alloc.free(root_mod);
-        const html_mod = "-Mhtmlparser=src/root.zig";
+        const html_mod = "-Mhtml=src/root.zig";
         const argv = [_][]const u8{
             "zig",
             "test",
             "--dep",
-            "htmlparser",
+            "html",
             root_mod,
             "--dep",
             "config",
@@ -2786,13 +2786,13 @@ fn runExamplesCheck(io: std.Io, alloc: std.mem.Allocator) !void {
 fn usage() void {
     std.debug.print(
         \\Usage:
-        \\  htmlparser-tools setup-parsers
-        \\  htmlparser-tools setup-fixtures [--refresh]
-        \\  htmlparser-tools run-benchmarks [--profile quick|stable] [--write-baseline]
-        \\  htmlparser-tools sync-docs-bench
-        \\  htmlparser-tools run-external-suites [--mode strictest|fastest|both] [--max-html5lib-cases N] [--max-whatwg-cases N] [--json-out path] [--failures-out path]
-        \\  htmlparser-tools docs-check
-        \\  htmlparser-tools examples-check
+        \\  html-tools setup-parsers
+        \\  html-tools setup-fixtures [--refresh]
+        \\  html-tools run-benchmarks [--profile quick|stable] [--write-baseline]
+        \\  html-tools sync-docs-bench
+        \\  html-tools run-external-suites [--mode strictest|fastest|both] [--max-html5lib-cases N] [--max-whatwg-cases N] [--json-out path] [--failures-out path]
+        \\  html-tools docs-check
+        \\  html-tools examples-check
         \\
     , .{});
 }

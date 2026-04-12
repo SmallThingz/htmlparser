@@ -16,20 +16,20 @@ pub fn build(b: *std.Build) void {
     const config_options = b.addOptions();
     config_options.addOption(IntLen, "intlen", intlen);
 
-    const mod = b.addModule("htmlparser", .{
+    const mod = b.addModule("html", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
     });
     mod.addOptions("config", config_options);
 
     const exe = b.addExecutable(.{
-        .name = "htmlparser",
+        .name = "html",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "htmlparser", .module = mod },
+                .{ .name = "html", .module = mod },
             },
         }),
     });
@@ -40,25 +40,25 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "htmlparser", .module = mod },
+            .{ .name = "html", .module = mod },
         },
     });
 
     const bench_exe = b.addExecutable(.{
-        .name = "htmlparser-bench",
+        .name = "html-bench",
         .root_module = b.createModule(.{
             .root_source_file = b.path("tools/bench/bench.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "htmlparser", .module = mod },
+                .{ .name = "html", .module = mod },
                 .{ .name = "parse_mode", .module = parse_mode_mod },
             },
         }),
     });
 
     const tools_exe = b.addExecutable(.{
-        .name = "htmlparser-tools",
+        .name = "html-tools",
         .root_module = b.createModule(.{
             .root_source_file = b.path("tools/scripts.zig"),
             .target = target,
@@ -72,7 +72,7 @@ pub fn build(b: *std.Build) void {
 
     const run_step = b.step("run", "Run the demo app");
     const bench_step = b.step("bench", "Run parser/query benchmarks");
-    const tools_step = b.step("tools", "Run htmlparser-tools utility");
+    const tools_step = b.step("tools", "Run html-tools utility");
     const bench_compare_step = b.step("bench-compare", "Benchmark against external parser implementations");
     const conformance_step = b.step("conformance", "Run external parser/selector conformance suites (strictest+fastest)");
     const docs_check_step = b.step("docs-check", "Validate markdown links and documented commands");
@@ -150,13 +150,13 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "htmlparser", .module = mod },
+                .{ .name = "html", .module = mod },
                 .{ .name = "examples", .module = b.createModule(.{
                     .root_source_file = b.path("examples/examples.zig"),
                     .target = target,
                     .optimize = optimize,
                     .imports = &.{
-                        .{ .name = "htmlparser", .module = mod },
+                        .{ .name = "html", .module = mod },
                     },
                 }) },
             },
@@ -171,7 +171,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "htmlparser", .module = mod },
+                .{ .name = "html", .module = mod },
             },
         }),
         .test_runner = .{ .path = b.path("tools/test_runner.zig"), .mode = .simple },
@@ -194,7 +194,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "htmlparser", .module = mod },
+                .{ .name = "html", .module = mod },
                 .{ .name = "parse_mode", .module = parse_mode_mod },
             },
         }),

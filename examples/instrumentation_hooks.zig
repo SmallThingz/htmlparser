@@ -1,5 +1,5 @@
 const std = @import("std");
-const html = @import("htmlparser");
+const html = @import("html");
 const default_options: html.ParseOptions = .{};
 const Document = default_options.GetDocument();
 

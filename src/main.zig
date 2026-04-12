@@ -1,6 +1,6 @@
 const std = @import("std");
-const htmlparser = @import("htmlparser");
-const default_options: htmlparser.ParseOptions = .{};
+const html = @import("html");
+const default_options: html.ParseOptions = .{};
 const Document = default_options.GetDocument();
 
 /// Minimal stdout smoke print used by the demo executable.
@@ -9,7 +9,7 @@ pub fn bufferedPrint(io: std.Io) !void {
     var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buffer);
     const stdout = &stdout_writer.interface;
 
-    try stdout.print("htmlparser: run `zig build test`\n", .{});
+    try stdout.print("html: run `zig build test`\n", .{});
     try stdout.flush();
 }
 

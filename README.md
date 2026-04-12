@@ -1,4 +1,4 @@
-# 🚀 htmlparser
+# 🚀 zhtml
 
 High-throughput, destructive HTML parser + CSS selector engine for Zig.
 
@@ -52,7 +52,7 @@ Source: `bench/results/external_suite_report.json`
 
 ```zig
 const std = @import("std");
-const html = @import("htmlparser");
+const html = @import("html");
 const options: html.ParseOptions = .{};
 const Document = options.GetDocument();
 

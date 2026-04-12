@@ -1,16 +1,16 @@
 # Benchmark Suite
 
-This directory benchmarks `htmlparser` against other high-performance HTML parsers:
+This directory benchmarks `html` against other high-performance HTML parsers:
 
 - `strlen` baseline (C) for raw string scan comparison
 - `lexbor` (C, HTML5 parser)
 - `lol-html` (Rust, streaming rewriter/parser; parse-only comparison in this suite)
 
-It also benchmarks `htmlparser` query parsing throughput (runtime selector compile path).
-Query sections remain `htmlparser`-only; external parser comparisons are parse throughput only.
+It also benchmarks `html` query parsing throughput (runtime selector compile path).
+Query sections remain `html`-only; external parser comparisons are parse throughput only.
 `query-parse` is mode-independent and is measured once (`ours`) to avoid duplicate compatibility rows.
 
-`htmlparser` parse/query benchmark results are reported as:
+`html` parse/query benchmark results are reported as:
 
 - `ours`: fastest parse option bundle (lazy child views + whitespace text-node dropping)
 

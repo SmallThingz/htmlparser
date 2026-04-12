@@ -1,4 +1,4 @@
-# htmlparser Documentation
+# html Documentation
 
 This is the canonical manual for usage, API, selector behavior, performance workflow, conformance expectations, and internals.
 
@@ -24,7 +24,7 @@ This is the canonical manual for usage, API, selector behavior, performance work
 
 ```zig
 const std = @import("std");
-const html = @import("htmlparser");
+const html = @import("html");
 const options: html.ParseOptions = .{};
 const Document = options.GetDocument();
 
@@ -147,7 +147,7 @@ Compilation modes:
 
 ## Mode Guidance
 
-`htmlparser` is permissive by design. Choose parse options by workload:
+`html` is permissive by design. Choose parse options by workload:
 
 | Mode | Parse Options | Best For | Tradeoffs |
 |---|---|---|---|
@@ -178,7 +178,7 @@ Artifacts:
 Benchmark policy:
 
 - parse comparisons include `strlen`, `lexbor`, and parse-only `lol-html`
-- query parse/match/cached sections benchmark `htmlparser`
+- query parse/match/cached sections benchmark `html`
 - repeated runtime selector workloads should use cached selectors
 
 ## Latest Benchmark Snapshot

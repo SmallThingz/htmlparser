@@ -269,7 +269,7 @@ test "u64 parse accepts sparse 8 GiB plaintext input" {
     const opts: ParseOptions = .{};
     const Document = opts.GetDocument();
     var rand_src: std.Random.IoSource = .{ .io = io };
-    const path = try std.fmt.allocPrint(alloc, "/tmp/htmlparser-u64-8g-{x}.html", .{rand_src.interface().int(u64)});
+    const path = try std.fmt.allocPrint(alloc, "/tmp/html-u64-8g-{x}.html", .{rand_src.interface().int(u64)});
     defer alloc.free(path);
 
     const file = try std.Io.Dir.createFileAbsolute(io, path, .{

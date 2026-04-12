@@ -1,7 +1,7 @@
 .{
-    .name = .htmlparser,
+    .name = .html,
     .version = "0.0.0",
-    .fingerprint = 0x157d4f00230d47f3,
+    .fingerprint = 0x1879f8e53a69d776,
     .minimum_zig_version = "0.16.0-dev.2984+cb7d2b056",
     .dependencies = .{},
     .paths = .{
