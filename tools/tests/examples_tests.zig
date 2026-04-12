@@ -35,3 +35,7 @@ test "example parity: instrumentation hooks" {
 test "example parity: query-time decode" {
     try examples.query_time_decode.run();
 }
+
+test "example parity: non-destructive parse" {
+    try examples.non_destructive_parse.run();
+}

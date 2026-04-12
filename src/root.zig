@@ -308,3 +308,60 @@ test "u64 parse accepts sparse 8 GiB plaintext input" {
     try std.testing.expectEqual(@as(ParseInt, @intCast(tag.len)), text.raw().name_or_text.start);
     try std.testing.expectEqual(@as(ParseInt, @intCast(len)), text.raw().name_or_text.end);
 }
+
+test "non-destructive parse supports file-backed memory maps without changing bytes" {
+    const alloc = std.testing.allocator;
+    const io = std.testing.io;
+    const opts: ParseOptions = .{};
+    const Document = opts.GetDocument();
+    var rand_src: std.Random.IoSource = .{ .io = io };
+    const path = try std.fmt.allocPrint(alloc, "/tmp/html-nondestructive-mmap-{x}.html", .{rand_src.interface().int(u64)});
+    defer alloc.free(path);
+
+    const html = "<div id='x' data-v='a&amp;b'> hi &amp; bye </div>";
+    const file = try std.Io.Dir.createFileAbsolute(io, path, .{
+        .read = true,
+        .truncate = true,
+        .exclusive = true,
+    });
+    defer {
+        file.close(io);
+        std.Io.Dir.deleteFileAbsolute(io, path) catch {};
+    }
+
+    try file.setLength(io, html.len);
+
+    var init_map = try std.Io.File.MemoryMap.create(io, file, .{
+        .len = html.len,
+        .populate = false,
+        .undefined_contents = false,
+        .protection = .{ .read = true, .write = true },
+    });
+    @memcpy(init_map.memory[0..html.len], html);
+    init_map.destroy(io);
+
+    var mapped = try std.Io.File.MemoryMap.create(io, file, .{
+        .len = html.len,
+        .populate = false,
+        .undefined_contents = false,
+        .protection = .{ .read = true, .write = false },
+    });
+    defer mapped.destroy(io);
+
+    var doc = Document.init(alloc);
+    defer doc.deinit();
+    try doc.parse(mapped.memory, .{ .non_destructive = true });
+
+    const node = doc.queryOne("div#x") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("a&b", node.getAttributeValue("data-v").?);
+
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    try std.testing.expectEqualStrings("hi & bye", try node.innerText(arena.allocator()));
+
+    try std.testing.expectEqualStrings(html, mapped.memory);
+
+    const rendered = try std.fmt.allocPrint(alloc, "{f}", .{doc});
+    defer alloc.free(rendered);
+    try std.testing.expectEqualStrings(html, rendered);
+}

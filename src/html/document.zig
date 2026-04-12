@@ -45,10 +45,15 @@ const isElementLike = common.isElementLike;
 pub const ParseOptions = struct {
     // In fastest-mode style runs, whitespace-only text nodes can be dropped.
     drop_whitespace_text_nodes: bool = true,
+    // Preserves caller bytes by parsing a private writable shadow copy.
+    non_destructive: bool = false,
 
     /// Formats parse options for human-readable output.
     pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
-        try writer.print("ParseOptions{{drop_whitespace_text_nodes={}}}", .{self.drop_whitespace_text_nodes});
+        try writer.print("ParseOptions{{drop_whitespace_text_nodes={}, non_destructive={}}}", .{
+            self.drop_whitespace_text_nodes,
+            self.non_destructive,
+        });
     }
 
     /// Returns the raw node storage layout used by `Document.nodes`.
@@ -334,6 +339,9 @@ pub const ParseOptions = struct {
 
             allocator: std.mem.Allocator,
             source: []u8 = &[_]u8{},
+            original_source: []const u8 = &[_]u8{},
+            owned_shadow_source: ?[]u8 = null,
+            parse_is_non_destructive: bool = false,
 
             nodes: std.ArrayListUnmanaged(RawNodeType) = .empty,
             parse_stack: std.ArrayListUnmanaged(OpenElemType) = .empty,
@@ -358,6 +366,7 @@ pub const ParseOptions = struct {
 
             /// Releases all document-owned memory.
             pub fn deinit(noalias self: *DocSelf) void {
+                self.releaseOwnedShadowSource();
                 self.nodes.deinit(self.allocator);
                 self.parse_stack.deinit(self.allocator);
                 self.query_accel_id_map.deinit(self.allocator);
@@ -367,7 +376,10 @@ pub const ParseOptions = struct {
 
             /// Clears parsed state while retaining reusable capacities.
             pub fn clear(noalias self: *DocSelf) void {
+                self.releaseOwnedShadowSource();
                 self.source = &[_]u8{};
+                self.original_source = &[_]u8{};
+                self.parse_is_non_destructive = false;
                 self.nodes.clearRetainingCapacity();
                 self.parse_stack.clearRetainingCapacity();
                 if (self.query_one_arena) |*arena| _ = arena.reset(.retain_capacity);
@@ -378,12 +390,28 @@ pub const ParseOptions = struct {
                 if (self.query_all_generation == 0) self.query_all_generation = 1;
             }
 
-            /// Parses mutable HTML input in-place with supplied parse options.
-            pub fn parse(noalias self: *DocSelf, input: []u8, comptime opts: ParseOptions) !void {
+            /// Parses HTML input with supplied parse options.
+            /// In destructive mode, `input` must be mutable and is parsed in place.
+            /// In non-destructive mode, `input` may be read-only and is shadow-copied.
+            pub fn parse(noalias self: *DocSelf, input: anytype, comptime opts: ParseOptions) !void {
+                const parsed_input = getParseInputSlices(input);
                 self.clear();
-                self.source = input;
-                self.query_accel_budget_bytes = @max(input.len / QueryAccelBudgetDivisor, QueryAccelMinBudgetBytes);
-                try parser.parseInto(DocSelf, self, input, opts);
+                self.original_source = parsed_input.original;
+                self.parse_is_non_destructive = opts.non_destructive;
+                self.query_accel_budget_bytes = @max(parsed_input.original.len / QueryAccelBudgetDivisor, QueryAccelMinBudgetBytes);
+
+                if (comptime opts.non_destructive) {
+                    const shadow = try self.allocator.dupe(u8, parsed_input.original);
+                    errdefer self.allocator.free(shadow);
+                    self.owned_shadow_source = shadow;
+                    self.source = shadow;
+                    try parser.parseInto(DocSelf, self, shadow, opts);
+                    return;
+                }
+
+                const mutable = parsed_input.mutable orelse return error.InputMustBeMutable;
+                self.source = mutable;
+                try parser.parseInto(DocSelf, self, mutable, opts);
             }
 
             /// Returns first matching element for comptime selector.
@@ -558,11 +586,19 @@ pub const ParseOptions = struct {
 
             /// Writes HTML serialization of this node and its subtree to `writer`.
             pub fn writeHtml(self: @This(), writer: anytype) node_api.WriterError(@TypeOf(writer))!void {
+                if (self.parse_is_non_destructive) {
+                    try writer.writeAll(self.original_source);
+                    return;
+                }
                 return node_api.writeHtml(self.nodeAt(0).?, writer);
             }
 
             /// Writes HTML serialization of this document root only, excluding its children.
             pub fn writeHtmlSelf(self: @This(), writer: anytype) node_api.WriterError(@TypeOf(writer))!void {
+                if (self.parse_is_non_destructive) {
+                    try writer.writeAll(self.original_source);
+                    return;
+                }
                 return node_api.writeHtmlSelf(self.nodeAt(0).?, writer);
             }
 
@@ -576,6 +612,13 @@ pub const ParseOptions = struct {
                     self.query_one_arena = std.heap.ArenaAllocator.init(self.allocator);
                 }
                 return &self.query_one_arena.?;
+            }
+
+            fn releaseOwnedShadowSource(self: *DocSelf) void {
+                if (self.owned_shadow_source) |buf| {
+                    self.allocator.free(buf);
+                    self.owned_shadow_source = null;
+                }
             }
 
             fn ensureQueryAllArena(noalias self: *DocSelf) *std.heap.ArenaAllocator {
@@ -741,6 +784,40 @@ pub const ParseOptions = struct {
 /// Re-exported text extraction options used by node text APIs.
 pub const TextOptions = node_api.TextOptions;
 
+const ParseInputSlices = struct {
+    original: []const u8,
+    mutable: ?[]u8,
+};
+
+fn getParseInputSlices(input: anytype) ParseInputSlices {
+    const T = @TypeOf(input);
+    return switch (@typeInfo(T)) {
+        .pointer => |ptr| switch (ptr.size) {
+            .slice => {
+                if (ptr.child != u8) {
+                    @compileError("Document.parse expects a []u8 or []const u8 input slice");
+                }
+                return .{
+                    .original = input,
+                    .mutable = if (ptr.is_const) null else input,
+                };
+            },
+            .one => {
+                const child_info = @typeInfo(ptr.child);
+                if (child_info != .array or child_info.array.child != u8) {
+                    @compileError("Document.parse expects a slice or pointer-to-array of u8 bytes");
+                }
+                return .{
+                    .original = input[0..child_info.array.len],
+                    .mutable = if (ptr.is_const) null else input[0..child_info.array.len],
+                };
+            },
+            else => @compileError("Document.parse expects a slice or pointer-to-array input"),
+        },
+        else => @compileError("Document.parse expects a byte slice input"),
+    };
+}
+
 /// Inclusive-exclusive byte span into the document source buffer.
 pub const Span = struct {
     start: IndexInt = 0,
@@ -886,6 +963,31 @@ test "document parse + query basics" {
 
     var it = doc.queryAll("body > *");
     try std.testing.expect(it.next() != null);
+}
+
+test "non-destructive parse preserves caller bytes and formats exact original source" {
+    const alloc = std.testing.allocator;
+    var doc = Document.init(alloc);
+    defer doc.deinit();
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+
+    var html = "<div id='x' data-v='a&amp;b'> a &amp; b </div>".*;
+    const before = html;
+    try doc.parse(&html, .{ .non_destructive = true });
+
+    const node = doc.queryOne("div#x") orelse return error.TestUnexpectedResult;
+    const attr = node.getAttributeValue("data-v") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("a&b", attr);
+
+    const text = try node.innerText(arena.allocator());
+    try std.testing.expectEqualStrings("a & b", text);
+
+    try std.testing.expectEqualSlices(u8, before[0..], html[0..]);
+
+    const rendered = try std.fmt.allocPrint(alloc, "{f}", .{doc});
+    defer alloc.free(rendered);
+    try std.testing.expectEqualStrings(before[0..], rendered);
 }
 
 test "runtime queryAll iterator is stable across queryOneRuntime calls" {
@@ -2158,7 +2260,7 @@ test "format document types" {
     const opts: ParseOptions = .{ .drop_whitespace_text_nodes = false };
     const opts_out = try std.fmt.allocPrint(alloc, "{f}", .{opts});
     defer alloc.free(opts_out);
-    try std.testing.expectEqualStrings("ParseOptions{drop_whitespace_text_nodes=false}", opts_out);
+    try std.testing.expectEqualStrings("ParseOptions{drop_whitespace_text_nodes=false, non_destructive=false}", opts_out);
 
     const span: Span = .{ .start = 2, .end = 5 };
     const span_out = try std.fmt.allocPrint(alloc, "{f}", .{span});

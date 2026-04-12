@@ -7,3 +7,4 @@ pub const strict_vs_fastest_parse = @import("strict_vs_fastest_parse.zig");
 pub const debug_query_report = @import("debug_query_report.zig");
 pub const instrumentation_hooks = @import("instrumentation_hooks.zig");
 pub const query_time_decode = @import("query_time_decode.zig");
+pub const non_destructive_parse = @import("non_destructive_parse.zig");

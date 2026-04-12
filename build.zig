@@ -70,16 +70,12 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(bench_exe);
     b.installArtifact(tools_exe);
 
-    const run_step = b.step("run", "Run the demo app");
-    const bench_step = b.step("bench", "Run parser/query benchmarks");
     const tools_step = b.step("tools", "Run html-tools utility");
     const bench_compare_step = b.step("bench-compare", "Benchmark against external parser implementations");
     const conformance_step = b.step("conformance", "Run external parser/selector conformance suites (strictest+fastest)");
     const docs_check_step = b.step("docs-check", "Validate markdown links and documented commands");
     const examples_check_step = b.step("examples-check", "Compile and run all examples in test mode");
 
-    const run_cmd = b.addRunArtifact(exe);
-    const bench_cmd = b.addRunArtifact(bench_exe);
     const tools_cmd = b.addRunArtifact(tools_exe);
 
     const setup_parsers_cmd = b.addRunArtifact(tools_exe);
@@ -104,16 +100,12 @@ pub fn build(b: *std.Build) void {
     const examples_check_cmd = b.addRunArtifact(tools_exe);
     examples_check_cmd.addArg("examples-check");
 
-    run_step.dependOn(&run_cmd.step);
-    bench_step.dependOn(&bench_cmd.step);
     tools_step.dependOn(&tools_cmd.step);
     bench_compare_step.dependOn(&compare_cmd.step);
     conformance_step.dependOn(&conformance_cmd.step);
     docs_check_step.dependOn(&docs_check_cmd.step);
     examples_check_step.dependOn(&examples_check_cmd.step);
 
-    run_cmd.step.dependOn(b.getInstallStep());
-    bench_cmd.step.dependOn(b.getInstallStep());
     tools_cmd.step.dependOn(b.getInstallStep());
     setup_parsers_cmd.step.dependOn(b.getInstallStep());
     setup_fixtures_cmd.step.dependOn(b.getInstallStep());
@@ -123,8 +115,6 @@ pub fn build(b: *std.Build) void {
     examples_check_cmd.step.dependOn(b.getInstallStep());
 
     if (b.args) |args| {
-        run_cmd.addArgs(args);
-        bench_cmd.addArgs(args);
         tools_cmd.addArgs(args);
         compare_cmd.addArgs(args);
         conformance_cmd.addArgs(args);
