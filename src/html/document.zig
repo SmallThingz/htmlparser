@@ -1,7 +1,6 @@
 const std = @import("std");
 const tables = @import("tables.zig");
-const attr_scan = @import("attr_scan.zig");
-const attr_inline = @import("attr_inline.zig");
+const attr = @import("attr.zig");
 const entities = @import("entities.zig");
 const tags = @import("tags.zig");
 const runtime_selector = @import("../selector/runtime.zig");
@@ -291,7 +290,7 @@ pub const ParseOptions = struct {
             /// Returns decoded attribute value for `name`, if present.
             pub fn getAttributeValue(self: @This(), name: []const u8) ?[]const u8 {
                 const node_raw = &self.doc.nodes.items[self.index];
-                return attr_inline.getAttrValue(self.doc, node_raw, name);
+                return attr.getAttrValue(self.doc, node_raw, name);
             }
 
             /// Returns first element child.
@@ -481,7 +480,7 @@ pub const ParseOptions = struct {
                     }
 
                     const name_start = i;
-                    const scanned = attr_scan.scanAttrNameOrSkip(source, end, i);
+                    const scanned = attr.scanAttrNameOrSkip(source, end, i);
                     const name = scanned.name orelse return;
                     i = scanned.next_start;
                     if (name.len == 0) continue;
@@ -492,7 +491,7 @@ pub const ParseOptions = struct {
 
                     const delim = source[i];
                     if (delim == '=') {
-                        const raw_value = attr_scan.parseRawValue(source, end, i);
+                        const raw_value = attr.parseRawValue(source, end, i);
                         try writeByte(writer, ' ');
                         try writer.writeAll(source[name_start..raw_value.next_start]);
                         i = raw_value.next_start;
@@ -500,7 +499,7 @@ pub const ParseOptions = struct {
                     }
 
                     if (delim == 0) {
-                        const parsed = attr_scan.parseParsedValue(doc.mutable_source.?, end, i);
+                        const parsed = attr.parseParsedValue(doc.mutable_source.?, end, i);
                         try writeAttrName(writer, name);
                         try writeAttrValue(writer, parsed.value);
                         i = parsed.next_start;
@@ -559,7 +558,7 @@ pub const ParseOptions = struct {
                 const len_byte = source[start + 1];
                 if (len_byte == ExtendedGapSentinel) {
                     if (start + ExtendedGapHeaderLen > span_end) return span_end;
-                    const skip = std.mem.readInt(IndexInt, source[start + 2 .. start + ExtendedGapHeaderLen][0..@sizeOf(IndexInt)], attr_scan.nativeEndian());
+                    const skip = std.mem.readInt(IndexInt, source[start + 2 .. start + ExtendedGapHeaderLen][0..@sizeOf(IndexInt)], attr.nativeEndian());
                     const next = start + ExtendedGapHeaderLen + @as(usize, @intCast(skip));
                     return @min(next, span_end);
                 }
@@ -1138,7 +1137,7 @@ pub const ParseOptions = struct {
                     const node = &self.nodes.items[idx];
                     if (!isElementLike(node.kind)) continue;
 
-                    const id = attr_inline.getAttrValue(self, node, "id") orelse continue;
+                    const id = attr.getAttrValue(self, node, "id") orelse continue;
                     if (id.len == 0) continue;
                     const id_hash = hashIdValue(id);
 
@@ -1151,7 +1150,7 @@ pub const ParseOptions = struct {
                     if (gop.found_existing) {
                         const existing_idx = gop.value_ptr.*;
                         const existing_node = &self.nodes.items[existing_idx];
-                        const existing_id = attr_inline.getAttrValue(self, existing_node, "id") orelse "";
+                        const existing_id = attr.getAttrValue(self, existing_node, "id") orelse "";
                         // Hash collision on different ids would break index correctness.
                         // Disable this accel path and fall back to exact scan semantics.
                         if (!std.mem.eql(u8, existing_id, id)) {
@@ -1187,7 +1186,7 @@ pub const ParseOptions = struct {
                     return .miss;
                 };
                 const node = &mut_self.nodes.items[idx];
-                const current_id = attr_inline.getAttrValue(mut_self, node, "id") orelse {
+                const current_id = attr.getAttrValue(mut_self, node, "id") orelse {
                     return .miss;
                 };
                 if (std.mem.eql(u8, current_id, id)) {
@@ -1428,8 +1427,8 @@ test "non-destructive parse preserves caller bytes and formats exact original so
     try doc.parse(&html);
 
     const node = doc.queryOne("div#x") orelse return error.TestUnexpectedResult;
-    const attr = node.getAttributeValue("data-v") orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("a&b", attr);
+    const attr_value = node.getAttributeValue("data-v") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("a&b", attr_value);
 
     const text = try node.innerText(arena.allocator());
     try std.testing.expectEqualStrings("a & b", text);

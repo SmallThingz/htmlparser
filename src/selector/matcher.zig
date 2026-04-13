@@ -2,7 +2,7 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const tables = @import("../html/tables.zig");
 const tags = @import("../html/tags.zig");
-const attr_inline = @import("../html/attr_inline.zig");
+const attr = @import("../html/attr.zig");
 const common = @import("../common.zig");
 
 // SAFETY: Selector AST indices are trusted to be internally consistent
@@ -65,7 +65,7 @@ pub fn matchesAttrSelectorDebug(
     sel: ast.AttrSelector,
 ) bool {
     const name = sel.name.slice(selector_source);
-    const raw = attr_inline.getAttrValue(doc, node, name) orelse return false;
+    const raw = attr.getAttrValue(doc, node, name) orelse return false;
     const value = sel.value.slice(selector_source);
     return evalAttrOp(raw, value, sel.op);
 }
@@ -120,11 +120,11 @@ pub fn NotSimpleCtxDebug(comptime Doc: type, comptime Node: type) type {
         }
 
         fn getAttrValue(self: @This(), name: []const u8) ?[]const u8 {
-            return attr_inline.getAttrValue(self.doc, self.node, name);
+            return attr.getAttrValue(self.doc, self.node, name);
         }
 
         fn classMatches(self: @This(), class_name: []const u8) bool {
-            const class_attr = attr_inline.getAttrValue(self.doc, self.node, "class") orelse return false;
+            const class_attr = attr.getAttrValue(self.doc, self.node, "class") orelse return false;
             return tables.tokenIncludesAsciiWhitespace(class_attr, class_name);
         }
 
@@ -502,7 +502,7 @@ fn attrValueByNameFrom(
                 return value;
             }
 
-            attr_inline.collectSelectedValues(
+            attr.collectSelectedValues(
                 doc,
                 node,
                 c.names[0..c.count],
@@ -523,7 +523,7 @@ fn attrValueByName(doc: anytype, node: anytype, noalias probe: *AttrProbe, name:
     }
 
     if (!probe.overflow and probe.count < MaxProbeEntries) {
-        const value = attr_inline.getAttrValue(doc, node, name);
+        const value = attr.getAttrValue(doc, node, name);
         const idx = probe.count;
         probe.entries[idx] = .{
             .name = name,
@@ -536,7 +536,7 @@ fn attrValueByName(doc: anytype, node: anytype, noalias probe: *AttrProbe, name:
     probe.overflow = true;
     // Fallback for very large compounds still stays allocation-free; we simply
     // bypass memoization once the fixed probe budget is exhausted.
-    return attr_inline.getAttrValue(doc, node, name);
+    return attr.getAttrValue(doc, node, name);
 }
 
 const AttrProbeEntry = struct {

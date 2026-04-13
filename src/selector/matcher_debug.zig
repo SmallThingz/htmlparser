@@ -3,7 +3,7 @@ const ast = @import("ast.zig");
 const matcher = @import("matcher.zig");
 const tables = @import("../html/tables.zig");
 const tags = @import("../html/tags.zig");
-const attr_inline = @import("../html/attr_inline.zig");
+const attr = @import("../html/attr.zig");
 const selector_debug = @import("../debug/selector_debug.zig");
 const common = @import("../common.zig");
 const IndexInt = common.IndexInt;
@@ -118,7 +118,7 @@ fn classifyCompoundFailure(
 
     if (comp.hasId()) {
         const id = comp.id.slice(selector.source);
-        const value = attr_inline.getAttrValue(doc, node, "id") orelse return .{
+        const value = attr.getAttrValue(doc, node, "id") orelse return .{
             .kind = .id,
             .group_index = g,
             .compound_index = c,
@@ -131,7 +131,7 @@ fn classifyCompoundFailure(
     }
 
     if (comp.class_len != 0) {
-        const class_attr = attr_inline.getAttrValue(doc, node, "class") orelse return .{
+        const class_attr = attr.getAttrValue(doc, node, "class") orelse return .{
             .kind = .class,
             .group_index = g,
             .compound_index = c,
