@@ -75,8 +75,6 @@ pub const Range = extern struct {
 pub const AttrSelector = extern struct {
     /// Attribute name span inside selector source.
     name: Range,
-    /// Prehashed lowercase attribute name for fast matching.
-    name_hash: u32 = 0,
     /// Comparison operator for this attribute predicate.
     op: AttrOp = .exists,
     /// Optional attribute value span used by non-`exists` operators.
@@ -86,7 +84,7 @@ pub const AttrSelector = extern struct {
     pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.writeAll("AttrSelector{name=");
         try self.name.format(writer);
-        try writer.print(", name_hash={}, op={s}, value=", .{ self.name_hash, @tagName(self.op) });
+        try writer.print(", op={s}, value=", .{@tagName(self.op)});
         try self.value.format(writer);
         try writer.writeAll("}");
     }
@@ -324,14 +322,13 @@ test "format selector AST types" {
     const value_range = Range.from(6, 9);
     const attr_sel: AttrSelector = .{
         .name = range,
-        .name_hash = 123,
         .op = .prefix,
         .value = value_range,
     };
     const attr_out = try std.fmt.allocPrint(alloc, "{f}", .{attr_sel});
     defer alloc.free(attr_out);
     try std.testing.expectEqualStrings(
-        "AttrSelector{name=Range{start=2, len=3}, name_hash=123, op=prefix, value=Range{start=6, len=3}}",
+        "AttrSelector{name=Range{start=2, len=3}, op=prefix, value=Range{start=6, len=3}}",
         attr_out,
     );
 
@@ -361,7 +358,7 @@ test "format selector AST types" {
     const not_out = try std.fmt.allocPrint(alloc, "{f}", .{not_simple});
     defer alloc.free(not_out);
     try std.testing.expectEqualStrings(
-        "NotSimple{kind=class, text=Range{start=1, len=3}, attr=AttrSelector{name=Range{start=2, len=3}, name_hash=123, op=prefix, value=Range{start=6, len=3}}}",
+        "NotSimple{kind=class, text=Range{start=1, len=3}, attr=AttrSelector{name=Range{start=2, len=3}, op=prefix, value=Range{start=6, len=3}}}",
         not_out,
     );
 

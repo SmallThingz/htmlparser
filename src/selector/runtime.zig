@@ -232,31 +232,31 @@ const Parser = struct {
                         if (!self.consumeIf('~')) {
                             if (!self.consumeIf('|')) {
                                 if (!self.consumeIf(']')) return error.InvalidSelector;
-                                return .{ .name = name, .name_hash = tables.hashIgnoreCaseAscii(name.slice(self.source)), .op = .exists, .value = .{} };
+                                return .{ .name = name, .op = .exists, .value = .{} };
                             }
                             if (!self.consumeIf('=')) return error.InvalidSelector;
                             const v = try self.parseAttrValueThenClose();
-                            return .{ .name = name, .name_hash = tables.hashIgnoreCaseAscii(name.slice(self.source)), .op = .dash_match, .value = v };
+                            return .{ .name = name, .op = .dash_match, .value = v };
                         }
                         if (!self.consumeIf('=')) return error.InvalidSelector;
                         const v = try self.parseAttrValueThenClose();
-                        return .{ .name = name, .name_hash = tables.hashIgnoreCaseAscii(name.slice(self.source)), .op = .includes, .value = v };
+                        return .{ .name = name, .op = .includes, .value = v };
                     }
                     if (!self.consumeIf('=')) return error.InvalidSelector;
                     const v = try self.parseAttrValueThenClose();
-                    return .{ .name = name, .name_hash = tables.hashIgnoreCaseAscii(name.slice(self.source)), .op = .contains, .value = v };
+                    return .{ .name = name, .op = .contains, .value = v };
                 }
                 if (!self.consumeIf('=')) return error.InvalidSelector;
                 const v = try self.parseAttrValueThenClose();
-                return .{ .name = name, .name_hash = tables.hashIgnoreCaseAscii(name.slice(self.source)), .op = .suffix, .value = v };
+                return .{ .name = name, .op = .suffix, .value = v };
             }
             if (!self.consumeIf('=')) return error.InvalidSelector;
             const v = try self.parseAttrValueThenClose();
-            return .{ .name = name, .name_hash = tables.hashIgnoreCaseAscii(name.slice(self.source)), .op = .prefix, .value = v };
+            return .{ .name = name, .op = .prefix, .value = v };
         }
 
         const v = try self.parseAttrValueThenClose();
-        return .{ .name = name, .name_hash = tables.hashIgnoreCaseAscii(name.slice(self.source)), .op = .eq, .value = v };
+        return .{ .name = name, .op = .eq, .value = v };
     }
 
     fn parseAttrValueThenClose(noalias self: *Parser) Error!ast.Range {
