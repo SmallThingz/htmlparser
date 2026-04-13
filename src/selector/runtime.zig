@@ -405,30 +405,28 @@ const Parser = struct {
         return self.source[self.i];
     }
 
-    const appendAlloc = @import("../common.zig").appendAlloc;
-
     fn pushGroup(noalias self: *Parser, value: ast.Group) Error!void {
-        try appendAlloc(ast.Group, &self.groups, self.alloc, value);
+        try self.groups.append(self.alloc, value);
     }
 
     fn pushCompound(noalias self: *Parser, value: ast.Compound) Error!void {
-        try appendAlloc(ast.Compound, &self.compounds, self.alloc, value);
+        try self.compounds.append(self.alloc, value);
     }
 
     fn pushClass(noalias self: *Parser, value: ast.Range) Error!void {
-        try appendAlloc(ast.Range, &self.classes, self.alloc, value);
+        try self.classes.append(self.alloc, value);
     }
 
     fn pushAttr(noalias self: *Parser, value: ast.AttrSelector) Error!void {
-        try appendAlloc(ast.AttrSelector, &self.attrs, self.alloc, value);
+        try self.attrs.append(self.alloc, value);
     }
 
     fn pushPseudo(noalias self: *Parser, value: ast.Pseudo) Error!void {
-        try appendAlloc(ast.Pseudo, &self.pseudos, self.alloc, value);
+        try self.pseudos.append(self.alloc, value);
     }
 
     fn pushNotItem(noalias self: *Parser, value: ast.NotSimple) Error!void {
-        try appendAlloc(ast.NotSimple, &self.not_items, self.alloc, value);
+        try self.not_items.append(self.alloc, value);
     }
 };
 

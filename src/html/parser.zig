@@ -407,15 +407,14 @@ fn Parser(comptime Doc: type, comptime opts: anytype) type {
             return idx;
         }
 
-        const appendAlloc = common.appendAlloc;
         fn pushNode(noalias self: *Self, node: @TypeOf(self.doc.nodes.items[0])) !IndexInt {
             const len = self.doc.nodes.items.len;
-            try appendAlloc(@TypeOf(node), &self.doc.nodes, self.doc.allocator, node);
+            try self.doc.nodes.append(self.doc.allocator, node);
             return @intCast(len);
         }
 
         fn pushStack(noalias self: *Self, idx: IndexInt, tag_key: u64, tag_len: u16) !void {
-            try appendAlloc(OpenElem, &self.doc.parse_stack, self.doc.allocator, .{
+            try self.doc.parse_stack.append(self.doc.allocator, .{
                 .idx = idx,
                 .tag_key = tag_key,
                 .tag_len = tag_len,

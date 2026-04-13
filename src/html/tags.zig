@@ -20,11 +20,11 @@ pub inline fn equalByLenAndKeyIgnoreCase(a: []const u8, a_key: u64, b: []const u
     return if (a.len <= 8) true else tables.eqlIgnoreCaseAscii(a[8..], b[8..]);
 }
 
-inline fn litKey(comptime s: []const u8) u64 {
-    return comptime first8Key(s);
-}
-
 const KEY = struct {
+    inline fn litKey(comptime s: []const u8) u64 {
+        return comptime first8Key(s);
+    }
+
     const AREA = litKey("area");
     const BASE = litKey("base");
     const BR = litKey("br");

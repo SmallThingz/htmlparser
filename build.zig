@@ -22,19 +22,6 @@ pub fn build(b: *std.Build) void {
     });
     mod.addOptions("config", config_options);
 
-    const exe = b.addExecutable(.{
-        .name = "html",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "html", .module = mod },
-            },
-        }),
-    });
-    exe.root_module.addOptions("config", config_options);
-
     const parse_mode_mod = b.createModule(.{
         .root_source_file = b.path("tools/parse_mode.zig"),
         .target = target,
@@ -66,7 +53,6 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    b.installArtifact(exe);
     b.installArtifact(bench_exe);
     b.installArtifact(tools_exe);
 
@@ -128,12 +114,6 @@ pub fn build(b: *std.Build) void {
     });
     const run_mod_tests = b.addRunArtifact(mod_tests);
 
-    const exe_tests = b.addTest(.{
-        .root_module = exe.root_module,
-        .test_runner = .{ .path = b.path("tools/test_runner.zig"), .mode = .simple },
-    });
-    const run_exe_tests = b.addRunArtifact(exe_tests);
-
     const examples_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("tools/tests/examples_tests.zig"),
@@ -194,7 +174,6 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
-    test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_examples_tests.step);
     test_step.dependOn(&run_behavioral_tests.step);
     test_step.dependOn(&run_scripts_tests.step);
