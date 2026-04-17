@@ -192,6 +192,184 @@ fn encodeNumericValue(value: u32, consumed: usize) ?NumericDecoded {
     return .{ .consumed = consumed, .bytes = out, .len = len };
 }
 
+fn decodeReferenceAlloc(alloc: std.mem.Allocator, input: []const u8) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(alloc);
+
+    var i: usize = 0;
+    while (i < input.len) {
+        if (input[i] != '&') {
+            try out.append(alloc, input[i]);
+            i += 1;
+            continue;
+        }
+
+        if (i + 1 >= input.len) {
+            try out.append(alloc, '&');
+            break;
+        }
+
+        if (decodeEntityReference(input[i + 1 ..])) |decoded| {
+            try out.appendSlice(alloc, decoded.bytes[0..decoded.len]);
+            i += decoded.consumed;
+            continue;
+        }
+
+        try out.append(alloc, '&');
+        i += 1;
+    }
+
+    return try out.toOwnedSlice(alloc);
+}
+
+fn decodeEntityReference(rem: []const u8) ?Decoded {
+    if (rem.len < 3) return null;
+
+    return switch (rem[0]) {
+        'a' => if (std.mem.startsWith(u8, rem, "amp;"))
+            literalDecoded(5, '&')
+        else if (std.mem.startsWith(u8, rem, "apos;"))
+            literalDecoded(6, '\'')
+        else
+            null,
+        'l' => if (std.mem.startsWith(u8, rem, "lt;")) literalDecoded(4, '<') else null,
+        'g' => if (std.mem.startsWith(u8, rem, "gt;")) literalDecoded(4, '>') else null,
+        'q' => if (std.mem.startsWith(u8, rem, "quot;")) literalDecoded(6, '"') else null,
+        '#' => switch (decodeNumericReference(rem[1..])) {
+            .none => null,
+            .decoded => |decoded| decoded,
+            .replacement => |consumed| replacementDecoded(consumed),
+        },
+        else => null,
+    };
+}
+
+const ReferenceNumericResult = union(enum) {
+    none,
+    decoded: Decoded,
+    replacement: usize,
+};
+
+fn decodeNumericReference(rem: []const u8) ReferenceNumericResult {
+    if (rem.len == 0) return .none;
+    return switch (rem[0]) {
+        'x', 'X' => decodeNumericReferenceHex(rem[1..]),
+        else => decodeNumericReferenceDecimal(rem),
+    };
+}
+
+fn decodeNumericReferenceDecimal(rem: []const u8) ReferenceNumericResult {
+    if (rem.len == 0) return .none;
+
+    var i: usize = 0;
+    while (i < rem.len and rem[i] == '0') : (i += 1) {}
+
+    const scan_end = @min(rem.len, i + 9);
+    const semi_rel = std.mem.indexOfScalar(u8, rem[i..scan_end], ';') orelse return .none;
+    const semi = i + semi_rel;
+    const consumed = semi + 3;
+    if (semi_rel == 0) return .{ .replacement = consumed };
+    if (semi_rel > 7) return .{ .replacement = consumed };
+
+    var value: u32 = 0;
+    var j = i;
+    while (j < semi) : (j += 1) {
+        const digit = std.fmt.charToDigit(rem[j], 10) catch return .{ .replacement = consumed };
+        value = value * 10 + digit;
+    }
+
+    if (value == 0 or value > 0x10FFFF) return .{ .replacement = consumed };
+    return .{ .decoded = asDecoded(encodeNumericValue(value, consumed).?) };
+}
+
+fn decodeNumericReferenceHex(rem: []const u8) ReferenceNumericResult {
+    if (rem.len == 0) return .none;
+
+    var i: usize = 0;
+    while (i < rem.len and rem[i] == '0') : (i += 1) {}
+
+    const scan_end = @min(rem.len, i + 8);
+    const semi_rel = std.mem.indexOfScalar(u8, rem[i..scan_end], ';') orelse return .none;
+    const semi = i + semi_rel;
+    const consumed = semi + 4;
+    if (semi_rel == 0) return .{ .replacement = consumed };
+    if (semi_rel > 6) return .{ .replacement = consumed };
+
+    var value: u32 = 0;
+    var j = i;
+    while (j < semi) : (j += 1) {
+        const digit = std.fmt.charToDigit(rem[j], 16) catch return .{ .replacement = consumed };
+        value = value * 16 + digit;
+    }
+
+    if (value == 0 or value > 0x10FFFF) return .{ .replacement = consumed };
+    return .{ .decoded = asDecoded(encodeNumericValue(value, consumed).?) };
+}
+
+fn asDecoded(numeric: NumericDecoded) Decoded {
+    return .{
+        .consumed = numeric.consumed,
+        .bytes = numeric.bytes,
+        .len = numeric.len,
+    };
+}
+
+fn fillInterestingEntityBytes(random: std.Random, out: []u8) void {
+    for (out) |*b| {
+        b.* = switch (random.uintLessThan(u5, 16)) {
+            0 => '&',
+            1 => ';',
+            2 => '#',
+            3 => 'x',
+            4 => 'X',
+            5 => '<',
+            6 => '>',
+            7 => '\'',
+            8 => '"',
+            9 => ' ',
+            10 => '\n',
+            11 => '0' + random.uintLessThan(u8, 10),
+            12 => 'a' + random.uintLessThan(u8, 26),
+            13 => 'A' + random.uintLessThan(u8, 26),
+            else => random.int(u8),
+        };
+    }
+}
+
+fn fillInterestingEntityBytesSmith(smith: *std.testing.Smith, out: []u8) void {
+    for (out) |*b| {
+        b.* = switch (smith.value(u4)) {
+            0 => '&',
+            1 => ';',
+            2 => '#',
+            3 => 'x',
+            4 => 'X',
+            5 => '<',
+            6 => '>',
+            7 => '\'',
+            8 => '"',
+            9 => ' ',
+            10 => '\n',
+            11 => '0' + smith.valueRangeAtMost(u8, 0, 9),
+            12 => 'a' + smith.valueRangeAtMost(u8, 0, 25),
+            13 => 'A' + smith.valueRangeAtMost(u8, 0, 25),
+            else => smith.value(u8),
+        };
+    }
+}
+
+fn expectDecodeMatchesReference(alloc: std.mem.Allocator, input: []const u8) !void {
+    const expected = try decodeReferenceAlloc(alloc, input);
+    defer alloc.free(expected);
+
+    const buf = try alloc.dupe(u8, input);
+    defer alloc.free(buf);
+
+    const actual_len = decodeInPlace(buf);
+    try std.testing.expect(actual_len <= buf.len);
+    try std.testing.expectEqualSlices(u8, expected, buf[0..actual_len]);
+}
+
 test "decode entities" {
     var buf = "a&amp;b&#x20;".*;
     const n = decodeInPlace(&buf);
@@ -220,6 +398,45 @@ test "decode numeric entities rejects null codepoint" {
     var buf = "&#0;&#00;&#x0;&#X000;".*;
     const n = decodeInPlace(&buf);
     try std.testing.expectEqualSlices(u8, &ReplacementUtf8 ++ &ReplacementUtf8 ++ &ReplacementUtf8 ++ &ReplacementUtf8, buf[0..n]);
+}
+
+test "decodeInPlace randomized reference sweep" {
+    const alloc = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0x8f45_53f2_3be9_19d1);
+    const random = prng.random();
+
+    var case_idx: usize = 0;
+    while (case_idx < 1024) : (case_idx += 1) {
+        const len = random.intRangeLessThan(usize, 0, 129);
+        const input = try alloc.alloc(u8, len);
+        defer alloc.free(input);
+        fillInterestingEntityBytes(random, input);
+        try expectDecodeMatchesReference(alloc, input);
+    }
+}
+
+fn fuzzDecodeMatchesReference(alloc: std.mem.Allocator, smith: *std.testing.Smith) !void {
+    const len = smith.value(u8);
+    const input = try alloc.alloc(u8, len);
+    defer alloc.free(input);
+    fillInterestingEntityBytesSmith(smith, input);
+    try expectDecodeMatchesReference(alloc, input);
+}
+
+test "fuzz decodeInPlace matches reference decoder" {
+    try std.testing.fuzz(std.testing.allocator, fuzzDecodeMatchesReference, .{ .corpus = &.{
+        "",
+        "&",
+        "plain text",
+        "&&&&",
+        "&amp;",
+        "&lt;&gt;&quot;&apos;",
+        "&#32;&#x3e;&#X3E;",
+        "&#;&#x;&#0;&#x0;",
+        "&#1114112;&#x110000;",
+        "<div data-x='&amp;&#32;'>&#x3c;</div>",
+        "unterminated &amp and &#123 and &#xabc",
+    } });
 }
 
 test "decode entities keeps plain text unchanged" {

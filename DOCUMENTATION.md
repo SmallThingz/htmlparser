@@ -18,7 +18,7 @@ This is the canonical manual for usage, API, selector behavior, performance work
 
 ## Requirements
 
-- Zig `0.16.0-dev.3013+abd131e33`
+- Zig `0.16.0`
 - Mutable input buffers (`[]u8`) for destructive parsing
 - `[]const u8` inputs are supported when `ParseOptions.non_destructive = true`
 

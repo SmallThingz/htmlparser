@@ -606,6 +606,7 @@ pub const ParseOptions = struct {
                     @memcpy(stack_buf[0..consumed], rem[0..consumed]);
                     const new_len = entities.decodeInPlace(stack_buf[0..consumed]);
                     if (new_len >= consumed) return null;
+                    if (new_len > decoded_bytes.len) return null;
                     @memcpy(decoded_bytes[0..new_len], stack_buf[0..new_len]);
                     return .{ .consumed = consumed, .len = new_len };
                 }
@@ -1478,6 +1479,23 @@ test "non-destructive text reads do not rewrite text bytes" {
     try std.testing.expectEqualSlices(u8, before[0..], html[0..]);
 }
 
+test "non-destructive innerText ignores oversized malformed entity prefixes safely" {
+    const alloc = std.testing.allocator;
+    var doc = NonDestructiveDocument.init(alloc);
+    defer doc.deinit();
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+
+    var html = "<div id='x'>&xxxxxxxxxxxxxxxxxxxx&amp;</div>".*;
+    const before = html;
+    try doc.parse(&html);
+
+    const node = doc.queryOne("#x") orelse return error.TestUnexpectedResult;
+    const text = try node.innerText(arena.allocator());
+    try std.testing.expectEqualStrings("&xxxxxxxxxxxxxxxxxxxx&", text);
+    try std.testing.expectEqualSlices(u8, before[0..], html[0..]);
+}
+
 test "runtime queryAll iterator is stable across queryOneRuntime calls" {
     const alloc = std.testing.allocator;
     var doc = Document.init(alloc);
@@ -1545,25 +1563,6 @@ test "matcher queryOneIndex rejects invalid scope roots safely" {
     const sel = comptime ast.Selector.compile("div");
     const idx = matcher.queryOneIndex(Document, &doc, sel, @as(IndexInt, @intCast(doc.nodes.items.len + 10)));
     try std.testing.expect(idx == null);
-}
-
-test "raw text element metadata remains valid after child append growth" {
-    const alloc = std.testing.allocator;
-    var doc = Document.init(alloc);
-    defer doc.deinit();
-
-    var html = "<script>const x = 1;</script><div>ok</div>".*;
-    try doc.parse(&html);
-
-    const script = doc.queryOne("script") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(script.raw().subtree_end > script.index);
-
-    const text_node = doc.nodes.items[script.index + 1];
-    try std.testing.expect(text_node.kind == .text);
-    try std.testing.expectEqualStrings("const x = 1;", text_node.name_or_text.slice(doc.source));
-
-    const div = doc.queryOne("div") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(div.index > script.raw().subtree_end);
 }
 
 test "query results matrix (comptime selectors)" {
@@ -1966,149 +1965,6 @@ test "runtime query parsing remains correct across parse and clear" {
     try std.testing.expect((try doc.queryOneRuntime("div.x")) != null);
 }
 
-test "raw-text close handles mixed-case end tag and embedded < bytes" {
-    const alloc = std.testing.allocator;
-    var doc = Document.init(alloc);
-    defer doc.deinit();
-
-    var html = "<script>if (a < b) { x = \"<tag>\"; }</ScRiPt   ><div id='after'></div>".*;
-    try doc.parse(&html);
-
-    const script = doc.queryOne("script") orelse return error.TestUnexpectedResult;
-    const after = doc.queryOne("div#after") orelse return error.TestUnexpectedResult;
-    try std.testing.expect(script.raw().subtree_end < after.index);
-}
-
-test "raw-text unterminated tail keeps element open to end of input" {
-    const alloc = std.testing.allocator;
-    var doc = Document.init(alloc);
-    defer doc.deinit();
-
-    var html = "<script>const a = 1; <div>still script".*;
-    try doc.parse(&html);
-
-    const script = doc.queryOne("script") orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(IndexInt, @intCast(doc.nodes.items.len - 1)), script.raw().subtree_end);
-    try std.testing.expect((doc.queryOne("div")) == null);
-}
-
-test "svg subtrees are skipped and stored as one text child payload" {
-    const alloc = std.testing.allocator;
-    var doc = Document.init(alloc);
-    defer doc.deinit();
-
-    var html = "<div id='before'></div><svg id='s'><g><svg id='inner'><rect id='r'/></svg><circle id='c'/></g></svg><div id='after'></div>".*;
-    try doc.parse(&html);
-
-    const first_svg = doc.queryOne("svg") orelse return error.TestUnexpectedResult;
-    const svg_text = try first_svg.innerTextWithOptions(alloc, .{ .normalize_whitespace = false });
-    try std.testing.expectEqualStrings("<g><svg id='inner'><rect id='r'/></svg><circle id='c'/></g>", svg_text);
-
-    var svg_it = doc.queryAll("svg");
-    try std.testing.expect(svg_it.next() != null);
-    try std.testing.expect(svg_it.next() == null);
-
-    try std.testing.expect(doc.queryOne("#before") != null);
-    try std.testing.expect(doc.queryOne("#after") != null);
-    try std.testing.expect(doc.queryOne("#inner") == null);
-    try std.testing.expect(doc.queryOne("#r") == null);
-    try std.testing.expect(doc.queryOne("#c") == null);
-}
-
-test "svg skip scanner ignores <svg in quoted attributes" {
-    const alloc = std.testing.allocator;
-    var doc = Document.init(alloc);
-    defer doc.deinit();
-
-    var html = "<div id='x' data-k=\"prefix <svg attr='x'> suffix\"></div><p id='after'></p>".*;
-    try doc.parse(&html);
-
-    const x = doc.queryOne("#x") orelse return error.TestUnexpectedResult;
-    const v = x.getAttributeValue("data-k") orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("prefix <svg attr='x'> suffix", v);
-    try std.testing.expect(doc.queryOne("#after") != null);
-}
-
-test "self-closing svg is stored as regular element with no text child" {
-    const alloc = std.testing.allocator;
-    var doc = Document.init(alloc);
-    defer doc.deinit();
-
-    var html = "<div id='before'></div><svg id='s' viewBox='0 0 1 1' /><div id='after'></div>".*;
-    try doc.parse(&html);
-
-    const first_svg = doc.queryOne("svg") orelse return error.TestUnexpectedResult;
-    const svg_text = try first_svg.innerTextWithOptions(alloc, .{ .normalize_whitespace = false });
-    try std.testing.expectEqualStrings("", svg_text);
-    try std.testing.expect(first_svg.firstChild() == null);
-
-    try std.testing.expect(doc.queryOne("#before") != null);
-    try std.testing.expect(doc.queryOne("#after") != null);
-}
-
-test "optional-close p/li/td-th/dt-dd/head-body preserve expected query semantics" {
-    const alloc = std.testing.allocator;
-    var doc = Document.init(alloc);
-    defer doc.deinit();
-
-    var html = ("<html><head><title>x</title><body>" ++
-        "<p id='p1'>a<div id='d1'></div>" ++
-        "<ul><li id='li1'>x<li id='li2'>y</ul>" ++
-        "<dl><dt id='dt1'>a<dd id='dd1'>b<dt id='dt2'>c</dl>" ++
-        "<table><tr><td id='td1'>1<th id='th1'>2<td id='td2'>3</tr></table>" ++
-        "</body></html>").*;
-    try doc.parse(&html);
-
-    try std.testing.expect(doc.queryOne("#p1 + #d1") != null);
-    try std.testing.expect(doc.queryOne("#li1 + #li2") != null);
-    try std.testing.expect(doc.queryOne("#dt1 + #dd1") != null);
-    try std.testing.expect(doc.queryOne("#dd1 + #dt2") != null);
-    try std.testing.expect(doc.queryOne("#td1 + #th1") != null);
-    try std.testing.expect(doc.queryOne("#th1 + #td2") != null);
-    try std.testing.expect(doc.queryOne("head + body") != null);
-}
-
-test "mismatched close with identical first8 prefix does not close long tag" {
-    const alloc = std.testing.allocator;
-    var doc = Document.init(alloc);
-    defer doc.deinit();
-
-    var html = "<abcdefgh1 id='outer'><span id='inner'></span></abcdefgh2><p id='after'></p>".*;
-    try doc.parse(&html);
-
-    const outer = doc.queryOne("abcdefgh1#outer") orelse return error.TestUnexpectedResult;
-    const after = doc.queryOne("p#after") orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(outer.index, after.parentNode().?.index);
-}
-
-test "processing-instruction-like nodes end at the next >" {
-    const alloc = std.testing.allocator;
-    var doc = Document.init(alloc);
-    defer doc.deinit();
-
-    var html = "<?xml version='1.0'><div id='x'></div><p id='y'></p>".*;
-    try doc.parse(&html);
-
-    const x = doc.queryOne("div#x") orelse return error.TestUnexpectedResult;
-    const y = doc.queryOne("p#y") orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("div", x.tagName());
-    try std.testing.expectEqualStrings("p", y.tagName());
-}
-
-test "bang nodes respect quoted > when skipping doctype-like declarations" {
-    const alloc = std.testing.allocator;
-    var doc = Document.init(alloc);
-    defer doc.deinit();
-
-    var html = "<!DOCTYPE html SYSTEM \"a>b\"><div id='x'></div><p id='y'></p>".*;
-    try doc.parse(&html);
-
-    const x = doc.queryOne("div#x") orelse return error.TestUnexpectedResult;
-    const y = doc.queryOne("p#y") orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("div", x.tagName());
-    try std.testing.expectEqualStrings("p", y.tagName());
-}
-
 test "attr fast-path names are equivalent to generic lookup semantics" {
     const alloc = std.testing.allocator;
     var doc = Document.init(alloc);
@@ -2308,74 +2164,6 @@ test "parse option bundles preserve selector/query behavior for representative i
     const strict_empty = (strict_doc.queryOne("#e") orelse return error.TestUnexpectedResult).getAttributeValue("a") orelse return error.TestUnexpectedResult;
     const fast_empty = (fast_doc.queryOne("#e") orelse return error.TestUnexpectedResult).getAttributeValue("a") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings(strict_empty, fast_empty);
-}
-
-test "whitespace-only text nodes drop only in fastest mode" {
-    const alloc = std.testing.allocator;
-
-    var strict_doc = StrictDocument.init(alloc);
-    defer strict_doc.deinit();
-    var fast_doc = Document.init(alloc);
-    defer fast_doc.deinit();
-
-    var strict_html = "<div id='x'> \n\t </div><div id='y'> hi </div>".*;
-    var fast_html = strict_html;
-
-    try strict_doc.parse(&strict_html);
-    try fast_doc.parse(&fast_html);
-
-    try std.testing.expectEqual(@as(usize, 5), strict_doc.nodes.items.len);
-    try std.testing.expectEqual(@as(usize, 4), fast_doc.nodes.items.len);
-
-    const y = fast_doc.queryOne("#y") orelse return error.TestUnexpectedResult;
-    const text = try y.innerTextWithOptions(alloc, .{ .normalize_whitespace = false });
-    try std.testing.expectEqualStrings(" hi ", text);
-}
-
-test "fastest mode drops indentation-only runs between child elements" {
-    const alloc = std.testing.allocator;
-    var doc = Document.init(alloc);
-    defer doc.deinit();
-
-    var html = "<div>\n  <a></a>\n  <b></b>\n</div>".*;
-    try doc.parse(&html);
-
-    try std.testing.expectEqual(@as(usize, 4), doc.nodes.items.len);
-
-    const div = doc.nodeAt(1) orelse return error.TestUnexpectedResult;
-    const a = div.firstChild() orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("a", doc.nodes.items[a.index].name_or_text.slice(doc.source));
-
-    const b = a.nextSibling() orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("b", doc.nodes.items[b.index].name_or_text.slice(doc.source));
-    try std.testing.expect(b.nextSibling() == null);
-}
-
-test "attribute scanner handles quoted > and self-closing tails" {
-    const alloc = std.testing.allocator;
-    var doc = Document.init(alloc);
-    defer doc.deinit();
-
-    var html = "<div id='a' data-q='x>y' data-n=abc></div><img id='i' src='x' /><br id='b'>".*;
-    try doc.parse(&html);
-
-    try std.testing.expect(doc.queryOne("div#a[data-q='x>y']") != null);
-    try std.testing.expect(doc.queryOne("img#i[src='x']") != null);
-    try std.testing.expect(doc.queryOne("br#b") != null);
-}
-
-test "attribute parsing still builds the DOM" {
-    const alloc = std.testing.allocator;
-    var doc = Document.init(alloc);
-    defer doc.deinit();
-
-    var html = "<div id='x'><span id='y'></span></div>".*;
-    try doc.parse(&html);
-
-    // Document node plus parsed element nodes must exist.
-    try std.testing.expect(doc.nodes.items.len > 1);
-    try std.testing.expect(doc.queryOne("#x") != null);
-    try std.testing.expect(doc.queryOne("#y") != null);
 }
 
 test "children() iterator traverses sibling-chain nodes" {
