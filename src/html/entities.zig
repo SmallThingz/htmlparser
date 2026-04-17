@@ -32,6 +32,10 @@ const NumericParseResult = union(enum) {
     replacement: usize,
 };
 
+fn isInvalidNumericCodepoint(value: u32) bool {
+    return value == 0 or value > 0x10FFFF or (value >= 0xD800 and value <= 0xDFFF);
+}
+
 /// Decodes entities in-place over entire slice and returns new length.
 pub fn decodeInPlace(slice: []u8) usize {
     return decodeInPlaceFrom(slice, 0);
@@ -154,9 +158,11 @@ fn parseNumericDecimal(rem: []const u8) NumericParseResult {
         value = value * 10 + digit;
     }
 
-    if (value == 0 or value > 0x10FFFF) return .{ .replacement = consumed };
-
-    return .{ .decoded = encodeNumericValue(value, consumed).? };
+    if (isInvalidNumericCodepoint(value)) return .{ .replacement = consumed };
+    if (encodeNumericValue(value, consumed)) |decoded| {
+        return .{ .decoded = decoded };
+    }
+    return .{ .replacement = consumed };
 }
 
 fn parseNumericHex(rem: []const u8) NumericParseResult {
@@ -180,9 +186,11 @@ fn parseNumericHex(rem: []const u8) NumericParseResult {
         value = value * 16 + digit;
     }
 
-    if (value == 0 or value > 0x10FFFF) return .{ .replacement = consumed };
-
-    return .{ .decoded = encodeNumericValue(value, consumed).? };
+    if (isInvalidNumericCodepoint(value)) return .{ .replacement = consumed };
+    if (encodeNumericValue(value, consumed)) |decoded| {
+        return .{ .decoded = decoded };
+    }
+    return .{ .replacement = consumed };
 }
 
 fn encodeNumericValue(value: u32, consumed: usize) ?NumericDecoded {
@@ -278,8 +286,11 @@ fn decodeNumericReferenceDecimal(rem: []const u8) ReferenceNumericResult {
         value = value * 10 + digit;
     }
 
-    if (value == 0 or value > 0x10FFFF) return .{ .replacement = consumed };
-    return .{ .decoded = asDecoded(encodeNumericValue(value, consumed).?) };
+    if (isInvalidNumericCodepoint(value)) return .{ .replacement = consumed };
+    if (encodeNumericValue(value, consumed)) |decoded| {
+        return .{ .decoded = asDecoded(decoded) };
+    }
+    return .{ .replacement = consumed };
 }
 
 fn decodeNumericReferenceHex(rem: []const u8) ReferenceNumericResult {
@@ -302,8 +313,11 @@ fn decodeNumericReferenceHex(rem: []const u8) ReferenceNumericResult {
         value = value * 16 + digit;
     }
 
-    if (value == 0 or value > 0x10FFFF) return .{ .replacement = consumed };
-    return .{ .decoded = asDecoded(encodeNumericValue(value, consumed).?) };
+    if (isInvalidNumericCodepoint(value)) return .{ .replacement = consumed };
+    if (encodeNumericValue(value, consumed)) |decoded| {
+        return .{ .decoded = asDecoded(decoded) };
+    }
+    return .{ .replacement = consumed };
 }
 
 fn asDecoded(numeric: NumericDecoded) Decoded {
@@ -400,6 +414,16 @@ test "decode numeric entities rejects null codepoint" {
     try std.testing.expectEqualSlices(u8, &ReplacementUtf8 ++ &ReplacementUtf8 ++ &ReplacementUtf8 ++ &ReplacementUtf8, buf[0..n]);
 }
 
+test "decode numeric entities rejects surrogate codepoints" {
+    var buf = "&#55296;&#57343;&#xD800;&#xDFFF;&#xd800;&#xdfff;".*;
+    const n = decodeInPlace(&buf);
+    try std.testing.expectEqualSlices(
+        u8,
+        &ReplacementUtf8 ++ &ReplacementUtf8 ++ &ReplacementUtf8 ++ &ReplacementUtf8 ++ &ReplacementUtf8 ++ &ReplacementUtf8,
+        buf[0..n],
+    );
+}
+
 test "decodeInPlace randomized reference sweep" {
     const alloc = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(0x8f45_53f2_3be9_19d1);
@@ -433,6 +457,7 @@ test "fuzz decodeInPlace matches reference decoder" {
         "&lt;&gt;&quot;&apos;",
         "&#32;&#x3e;&#X3E;",
         "&#;&#x;&#0;&#x0;",
+        "&#xD800;&#xDFFF;&#55296;&#57343;",
         "&#1114112;&#x110000;",
         "<div data-x='&amp;&#32;'>&#x3c;</div>",
         "unterminated &amp and &#123 and &#xabc",

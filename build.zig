@@ -110,6 +110,7 @@ pub fn build(b: *std.Build) void {
 
     const mod_tests = b.addTest(.{
         .root_module = mod,
+        .test_runner = .{ .path = b.path("tools/test_runner.zig"), .mode = .simple },
     });
     const run_mod_tests = b.addRunArtifact(mod_tests);
 
@@ -130,6 +131,7 @@ pub fn build(b: *std.Build) void {
                 }) },
             },
         }),
+        .test_runner = .{ .path = b.path("tools/test_runner.zig"), .mode = .simple },
     });
     const run_examples_tests = b.addRunArtifact(examples_tests);
 
@@ -142,6 +144,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "html", .module = mod },
             },
         }),
+        .test_runner = .{ .path = b.path("tools/test_runner.zig"), .mode = .simple },
     });
     const run_behavioral_tests = b.addRunArtifact(behavioral_tests);
 
@@ -151,6 +154,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         }),
+        .test_runner = .{ .path = b.path("tools/test_runner.zig"), .mode = .simple },
     });
     const run_scripts_tests = b.addRunArtifact(scripts_tests);
 
@@ -164,6 +168,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "parse_mode", .module = parse_mode_mod },
             },
         }),
+        .test_runner = .{ .path = b.path("tools/test_runner.zig"), .mode = .simple },
     });
     const run_bench_tests = b.addRunArtifact(bench_tests);
 
