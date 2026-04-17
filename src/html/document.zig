@@ -332,7 +332,7 @@ pub const ParseOptions = struct {
 
             fn decodeTextNode(noalias node: anytype, doc: anytype) []const u8 {
                 const text_mut = node.name_or_text.sliceMut(doc.mutable_source.?);
-                const new_len = entities.decodeInPlaceIfEntity(text_mut);
+                const new_len = entities.decodeInPlace(text_mut);
                 node.name_or_text.end = node.name_or_text.start + @as(IndexInt, @intCast(new_len));
                 return node.name_or_text.slice(doc.source);
             }
@@ -565,8 +565,9 @@ pub const ParseOptions = struct {
                     };
 
                     if (amp > idx) out.appendSliceAssumeCapacity(seg[idx..amp]);
-                    if (entities.decodeEntityPrefix(seg[amp..])) |decoded| {
-                        out.appendSliceAssumeCapacity(decoded.bytes[0..decoded.len]);
+                    var decoded_bytes: [4]u8 = undefined;
+                    if (decodeEntityPrefixBytes(alloc, seg[amp..], &decoded_bytes)) |decoded| {
+                        out.appendSliceAssumeCapacity(decoded_bytes[0..decoded.len]);
                         idx = amp + decoded.consumed;
                     } else {
                         out.appendAssumeCapacity(seg[amp]);
@@ -585,14 +586,37 @@ pub const ParseOptions = struct {
                     };
 
                     if (amp > idx) appendNormalizedSegmentAssumeCapacity(out, seg[idx..amp], state);
-                    if (entities.decodeEntityPrefix(seg[amp..])) |decoded| {
-                        appendNormalizedSegmentAssumeCapacity(out, decoded.bytes[0..decoded.len], state);
+                    var decoded_bytes: [4]u8 = undefined;
+                    if (decodeEntityPrefixBytes(alloc, seg[amp..], &decoded_bytes)) |decoded| {
+                        appendNormalizedSegmentAssumeCapacity(out, decoded_bytes[0..decoded.len], state);
                         idx = amp + decoded.consumed;
                     } else {
                         appendNormalizedSegmentAssumeCapacity(out, seg[amp .. amp + 1], state);
                         idx = amp + 1;
                     }
                 }
+            }
+
+            fn decodeEntityPrefixBytes(alloc: std.mem.Allocator, rem: []const u8, decoded_bytes: *[4]u8) ?struct { consumed: usize, len: usize } {
+                const semi = std.mem.indexOfScalar(u8, rem, ';') orelse return null;
+                const consumed = semi + 1;
+
+                var stack_buf: [32]u8 = undefined;
+                if (consumed <= stack_buf.len) {
+                    @memcpy(stack_buf[0..consumed], rem[0..consumed]);
+                    const new_len = entities.decodeInPlace(stack_buf[0..consumed]);
+                    if (new_len >= consumed) return null;
+                    @memcpy(decoded_bytes[0..new_len], stack_buf[0..new_len]);
+                    return .{ .consumed = consumed, .len = new_len };
+                }
+
+                const copied = alloc.dupe(u8, rem[0..consumed]) catch return null;
+                defer alloc.free(copied);
+                const new_len = entities.decodeInPlace(copied);
+                if (new_len >= consumed) return null;
+                if (new_len > decoded_bytes.len) return null;
+                @memcpy(decoded_bytes[0..new_len], copied[0..new_len]);
+                return .{ .consumed = consumed, .len = new_len };
             }
 
             fn ensureOutExtra(noalias out: *std.ArrayList(u8), alloc: std.mem.Allocator, extra: usize) !void {

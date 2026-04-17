@@ -363,7 +363,7 @@ fn materializeRawValueOwned(doc: anytype, source: []const u8, raw: RawValue) []c
     const arena = doc.ensureDecodedValueArena();
     const alloc = arena.allocator();
     const copied = alloc.dupe(u8, slice) catch return slice;
-    const new_len = entities.decodeInPlaceIfEntity(copied);
+    const new_len = entities.decodeInPlace(copied);
     return copied[0..new_len];
 }
 
@@ -378,7 +378,7 @@ fn materializeRawValue(source: []u8, span_end: usize, eq_index: usize, raw: RawV
     }
 
     var decoded_len: usize = raw.end - raw.start;
-    decoded_len = entities.decodeInPlaceIfEntity(source[raw.start..raw.end]);
+    decoded_len = entities.decodeInPlace(source[raw.start..raw.end]);
 
     if (raw.kind == .quoted) {
         source[eq_index] = 0;
