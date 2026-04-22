@@ -297,23 +297,6 @@ fn matchGroupFromRight(comptime Doc: type, noalias doc: *const Doc, selector: as
 
 fn firstMatchForGroup(comptime Doc: type, doc: *const Doc, selector: ast.Selector, group: ast.Group, scope_root: IndexInt) ?IndexInt {
     const rightmost = group.compound_len - 1;
-    const comp_abs: usize = @intCast(group.compound_start + rightmost);
-    const comp = selector.compounds[comp_abs];
-
-    if (@hasDecl(Doc, "queryAccelLookupId") and comp.hasId()) {
-        const id = comp.id.slice(selector.source);
-        switch (doc.queryAccelLookupId(id)) {
-            .hit => |idx| {
-                if (inScope(doc, idx, scope_root) and matchGroupFromRight(Doc, doc, selector, group, rightmost, idx, scope_root)) {
-                    return idx;
-                }
-                // Duplicate ids are common in real HTML. If the accelerated hit does not
-                // satisfy scope/other predicates, fall back to full scan semantics.
-            },
-            .miss => return null,
-            .unavailable => {},
-        }
-    }
 
     const bounds = traversalBounds(Doc, doc, scope_root);
     var i = bounds.start;
@@ -323,12 +306,6 @@ fn firstMatchForGroup(comptime Doc: type, doc: *const Doc, selector: ast.Selecto
         if (matchGroupFromRight(Doc, doc, selector, group, rightmost, i, scope_root)) return i;
     }
     return null;
-}
-
-fn inScope(doc: anytype, idx: IndexInt, scope_root: IndexInt) bool {
-    if (idx == InvalidIndex or idx >= doc.nodes.items.len) return false;
-    if (scope_root == InvalidIndex) return idx > 0;
-    return idx > scope_root and idx <= doc.nodes.items[scope_root].subtree_end;
 }
 
 fn matchesCompound(comptime Doc: type, noalias doc: *const Doc, selector: ast.Selector, comp: ast.Compound, node_index: IndexInt) bool {

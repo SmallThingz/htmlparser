@@ -20,14 +20,6 @@ const IndexInt = common.IndexInt;
 
 /// Sentinel used for missing node indexes and invalid spans.
 pub const InvalidIndex: IndexInt = common.InvalidIndex;
-const QueryAccelMinBudgetBytes: usize = 4096;
-const QueryAccelBudgetDivisor: usize = 20; // 5%
-
-const QueryAccelIdLookup = union(enum) {
-    unavailable,
-    miss,
-    hit: IndexInt,
-};
 
 /// Stored node kind in the raw DOM backing arrays.
 pub const NodeType = enum(u3) {
@@ -830,19 +822,6 @@ pub const ParseOptions = struct {
             /// Monotonic generation counter for runtime iterator invalidation.
             query_all_generation: u64 = 1,
 
-            /// Soft memory budget for query acceleration indexes.
-            query_accel_budget_bytes: usize = 0,
-            /// Bytes currently reserved by acceleration structures.
-            query_accel_used_bytes: usize = 0,
-            /// True once the acceleration budget has been exhausted.
-            query_accel_budget_exhausted: bool = false,
-            /// True once the id index has been built successfully.
-            query_accel_id_built: bool = false,
-            /// True once the id index has been disabled for correctness or budget reasons.
-            query_accel_id_disabled: bool = false,
-            /// Hash map used by the optional id acceleration path.
-            query_accel_id_map: std.AutoHashMapUnmanaged(u64, IndexInt) = .{},
-
             /// Initializes an empty document using `allocator` for internal storage.
             pub fn init(allocator: std.mem.Allocator) DocSelf {
                 return .{
@@ -854,7 +833,6 @@ pub const ParseOptions = struct {
             /// Releases all document-owned memory.
             pub fn deinit(noalias self: *DocSelf) void {
                 self.nodes.deinit(self.allocator);
-                self.query_accel_id_map.deinit(self.allocator);
                 if (self.query_one_arena) |*arena| arena.deinit();
                 if (self.query_all_arena) |*arena| arena.deinit();
                 if (self.decoded_value_arena) |*arena| arena.deinit();
@@ -867,8 +845,6 @@ pub const ParseOptions = struct {
                 if (self.query_one_arena) |*arena| _ = arena.reset(.retain_capacity);
                 if (self.query_all_arena) |*arena| _ = arena.reset(.retain_capacity);
                 if (self.decoded_value_arena) |*arena| _ = arena.reset(.retain_capacity);
-                self.query_accel_budget_bytes = 0;
-                self.resetQueryAccel();
                 self.query_all_generation +%= 1;
                 if (self.query_all_generation == 0) self.query_all_generation = 1;
             }
@@ -879,7 +855,6 @@ pub const ParseOptions = struct {
             pub fn parse(noalias self: *DocSelf, input: options.GetInput()) !void {
                 self.clear();
                 self.source = input;
-                self.query_accel_budget_bytes = @max(input.len / QueryAccelBudgetDivisor, QueryAccelMinBudgetBytes);
                 try parser.parseInto(options, self, input);
             }
 
@@ -1104,100 +1079,6 @@ pub const ParseOptions = struct {
                 return &self.decoded_value_arena.?;
             }
 
-            fn resetQueryAccel(self: *DocSelf) void {
-                self.query_accel_used_bytes = 0;
-                self.query_accel_budget_exhausted = false;
-                self.query_accel_id_built = false;
-                self.query_accel_id_disabled = false;
-                self.query_accel_id_map.clearRetainingCapacity();
-            }
-
-            fn queryAccelReserve(self: *DocSelf, bytes: usize) bool {
-                if (self.query_accel_budget_exhausted) return false;
-                const remaining = self.query_accel_budget_bytes -| self.query_accel_used_bytes;
-                if (bytes > remaining) {
-                    self.query_accel_budget_exhausted = true;
-                    return false;
-                }
-                self.query_accel_used_bytes += bytes;
-                return true;
-            }
-
-            fn ensureIdIndex(self: *DocSelf) bool {
-                if (self.query_accel_id_built) return true;
-                if (self.query_accel_id_disabled or self.query_accel_budget_exhausted) return false;
-
-                self.query_accel_id_map.clearRetainingCapacity();
-
-                var idx: IndexInt = 1;
-                while (idx < self.nodes.items.len) : (idx += 1) {
-                    const node = &self.nodes.items[idx];
-                    if (!isElementLike(node.kind)) continue;
-
-                    const id = attr.getAttrValue(self, node, "id") orelse continue;
-                    if (id.len == 0) continue;
-                    const id_hash = hashIdValue(id);
-
-                    const gop = self.query_accel_id_map.getOrPut(self.allocator, id_hash) catch {
-                        self.query_accel_id_disabled = true;
-                        self.query_accel_id_map.clearRetainingCapacity();
-                        return false;
-                    };
-
-                    if (gop.found_existing) {
-                        const existing_idx = gop.value_ptr.*;
-                        const existing_node = &self.nodes.items[existing_idx];
-                        const existing_id = attr.getAttrValue(self, existing_node, "id") orelse "";
-                        // Hash collision on different ids would break index correctness.
-                        // Disable this accel path and fall back to exact scan semantics.
-                        if (!std.mem.eql(u8, existing_id, id)) {
-                            self.query_accel_id_disabled = true;
-                            self.query_accel_id_map.clearRetainingCapacity();
-                            return false;
-                        }
-                        continue;
-                    }
-
-                    if (!self.queryAccelReserve(@sizeOf(u64) + @sizeOf(IndexInt) + 16)) {
-                        _ = self.query_accel_id_map.remove(id_hash);
-                        self.query_accel_id_disabled = true;
-                        self.query_accel_id_map.clearRetainingCapacity();
-                        return false;
-                    }
-
-                    gop.value_ptr.* = idx;
-                }
-
-                self.query_accel_id_built = true;
-                return true;
-            }
-
-            /// Internal id-index lookup used by matcher acceleration path.
-            pub fn queryAccelLookupId(self: *const DocSelf, id: []const u8) QueryAccelIdLookup {
-                const mut_self: *DocSelf = @constCast(self);
-                if (!mut_self.ensureIdIndex()) {
-                    return .unavailable;
-                }
-                const id_hash = hashIdValue(id);
-                const idx = mut_self.query_accel_id_map.get(id_hash) orelse {
-                    return .miss;
-                };
-                const node = &mut_self.nodes.items[idx];
-                const current_id = attr.getAttrValue(mut_self, node, "id") orelse {
-                    return .miss;
-                };
-                if (std.mem.eql(u8, current_id, id)) {
-                    return .{ .hit = idx };
-                }
-
-                // Collision or stale key materialization: permanently disable the id
-                // index for this document and let caller use the scan fallback.
-                mut_self.query_accel_id_disabled = true;
-                mut_self.query_accel_id_built = false;
-                mut_self.query_accel_id_map.clearRetainingCapacity();
-                return .unavailable;
-            }
-
             /// Returns first direct element-like child index for `parent_idx`, if any.
             pub fn firstElementChildIndex(self: *const DocSelf, parent_idx: IndexInt) IndexInt {
                 if (parent_idx >= self.nodes.items.len) return InvalidIndex;
@@ -1296,10 +1177,6 @@ const QueryIter = DefaultTypeOptions.QueryIter();
 const Document = DefaultTypeOptions.GetDocument();
 const StrictDocument = StrictTypeOptions.GetDocument();
 const NonDestructiveDocument = NonDestructiveTypeOptions.GetDocument();
-
-fn hashIdValue(id: []const u8) u64 {
-    return std.hash.Wyhash.hash(0, id);
-}
 
 fn assertNodeTypeLayouts() void {
     _ = @sizeOf(NodeRaw);
@@ -2037,7 +1914,7 @@ test "class token matching treats all ascii whitespace as separators" {
     try std.testing.expect((try doc.queryOneRuntime("#t[class~=e]")) != null);
 }
 
-test "scoped query falls back from id index when first id hit fails extra predicates" {
+test "scoped query with duplicate ids respects scope and extra predicates" {
     const alloc = std.testing.allocator;
     var doc = Document.init(alloc);
     defer doc.deinit();
@@ -2247,37 +2124,7 @@ test "moved document keeps node-scoped queries and navigation valid" {
     try std.testing.expectEqual(@as(IndexInt, a.index), b.parentNode().?.index);
 }
 
-test "query accel id index matches selector results" {
-    const alloc = std.testing.allocator;
-    var doc = Document.init(alloc);
-    defer doc.deinit();
-
-    var html =
-        "<div id='root'><a id='x' href='https://example' class='nav button'></a><span id='y'></span><a id='z' href='/local' class='nav'></a></div>".*;
-    try doc.parse(&html);
-
-    const x = doc.queryOne("#x") orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("a", x.raw().name_or_text.slice(doc.source));
-
-    const id_idx = switch (doc.queryAccelLookupId("x")) {
-        .hit => |idx| idx,
-        else => return error.TestUnexpectedResult,
-    };
-    try std.testing.expectEqual(x.index, id_idx);
-
-    const sel_hit = doc.queryOne("a[href^=https][class*=button]") orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(x.index, sel_hit.index);
-
-    const x_node = doc.nodeAt(id_idx) orelse return error.TestUnexpectedResult;
-    _ = x_node.getAttributeValue("class") orelse return error.TestUnexpectedResult;
-    const id_idx_after = switch (doc.queryAccelLookupId("x")) {
-        .hit => |idx| idx,
-        else => return error.TestUnexpectedResult,
-    };
-    try std.testing.expectEqual(id_idx, id_idx_after);
-}
-
-test "query accel state is invalidated by parse and clear" {
+test "clear resets parsed state and ownership tracking" {
     const alloc = std.testing.allocator;
     var doc = Document.init(alloc);
     defer doc.deinit();
@@ -2285,14 +2132,10 @@ test "query accel state is invalidated by parse and clear" {
     var html_a = "<div><a id='x'></a><a id='y'></a></div>".*;
     try doc.parse(&html_a);
 
-    try std.testing.expect(doc.queryAccelLookupId("x") != .unavailable);
-    try std.testing.expect(doc.query_accel_id_built);
-
     var html_b = "<main><p id='z'>owned</p></main>".*;
     try doc.parse(&html_b);
-    try std.testing.expect(!doc.query_accel_id_built);
-
-    try std.testing.expect(doc.queryAccelLookupId("x") == .miss);
+    try std.testing.expect(doc.queryOne("main") != null);
+    try std.testing.expect(doc.queryOne("#x") == null);
 
     const text_before_clear = (doc.queryOne("#z") orelse return error.TestUnexpectedResult)
         .innerTextWithOptions(alloc, .{ .normalize_whitespace = false }) catch return error.TestUnexpectedResult;
@@ -2303,7 +2146,6 @@ test "query accel state is invalidated by parse and clear" {
     try std.testing.expectEqual(@as(usize, 0), doc.source.len);
     try std.testing.expect(!doc.isOwned(text_before_clear));
     try std.testing.expect(doc.queryOne("main") == null);
-    try std.testing.expect(!doc.query_accel_id_built);
 }
 
 test "runtime attr-heavy selector stress uses in-node parents" {
