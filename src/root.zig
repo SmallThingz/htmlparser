@@ -1,54 +1,49 @@
 const std = @import("std");
-pub const ParseInt = @import("common.zig").IndexInt;
+const common = @import("common.zig");
+const instrumentation = @import("debug/instrumentation.zig");
+const document = @import("html/document.zig");
+const selector_ast = @import("selector/ast.zig");
+
+pub const ParseInt = common.IndexInt;
 
 /// Parse-time configuration and type factory for `Document`, `Node`, and iterators.
-pub const ParseOptions = @import("html/document.zig").ParseOptions;
+pub const ParseOptions = document.ParseOptions;
 /// Options controlling whitespace normalization behavior in text extraction APIs.
-pub const TextOptions = @import("html/document.zig").TextOptions;
+pub const TextOptions = document.TextOptions;
 /// Compiled selector representation shared by comptime/runtime query paths.
-pub const Selector = @import("selector/ast.zig").Selector;
+pub const Selector = selector_ast.Selector;
 /// Structured query-debug output populated by `queryOneDebug` APIs.
-pub const QueryDebugReport = @import("common.zig").QueryDebugReport;
+pub const QueryDebugReport = common.QueryDebugReport;
 /// Enumerates first-failure categories recorded by debug query reporting.
-pub const DebugFailureKind = @import("common.zig").DebugFailureKind;
+pub const DebugFailureKind = common.DebugFailureKind;
 /// Single near-miss record used by query diagnostics.
-pub const NearMiss = @import("common.zig").NearMiss;
+pub const NearMiss = common.NearMiss;
 /// Parse instrumentation payload emitted by hook wrappers.
-pub const ParseInstrumentationStats = @import("debug/instrumentation.zig").ParseInstrumentationStats;
+pub const ParseInstrumentationStats = instrumentation.ParseInstrumentationStats;
 /// Query instrumentation payload emitted by hook wrappers.
-pub const QueryInstrumentationStats = @import("debug/instrumentation.zig").QueryInstrumentationStats;
+pub const QueryInstrumentationStats = instrumentation.QueryInstrumentationStats;
 /// Kind of query operation measured by instrumentation wrappers.
-pub const QueryInstrumentationKind = @import("debug/instrumentation.zig").QueryInstrumentationKind;
+pub const QueryInstrumentationKind = instrumentation.QueryInstrumentationKind;
 
 /// Parses a document and invokes optional start/end hook callbacks.
-pub const parseWithHooks = @import("debug/instrumentation.zig").parseWithHooks;
+pub const parseWithHooks = instrumentation.parseWithHooks;
 /// Executes `queryOneRuntime` and reports timing through hook callbacks.
-pub const queryOneRuntimeWithHooks = @import("debug/instrumentation.zig").queryOneRuntimeWithHooks;
+pub const queryOneRuntimeWithHooks = instrumentation.queryOneRuntimeWithHooks;
 /// Executes `queryOneCached` and reports timing through hook callbacks.
-pub const queryOneCachedWithHooks = @import("debug/instrumentation.zig").queryOneCachedWithHooks;
+pub const queryOneCachedWithHooks = instrumentation.queryOneCachedWithHooks;
 /// Executes `queryAllRuntime` and reports timing through hook callbacks.
-pub const queryAllRuntimeWithHooks = @import("debug/instrumentation.zig").queryAllRuntimeWithHooks;
+pub const queryAllRuntimeWithHooks = instrumentation.queryAllRuntimeWithHooks;
 /// Executes `queryAllCached` and reports timing through hook callbacks.
-pub const queryAllCachedWithHooks = @import("debug/instrumentation.zig").queryAllCachedWithHooks;
+pub const queryAllCachedWithHooks = instrumentation.queryAllCachedWithHooks;
 
-/// Returns the `Document` type specialized for `options`.
-pub fn GetDocument(comptime options: ParseOptions) type {
-    return options.GetDocument();
-}
-
-/// Returns the node-wrapper type specialized for `options`.
-pub fn GetNode(comptime options: ParseOptions) type {
-    return options.GetNode();
-}
-
-/// Returns the raw node storage type specialized for `options`.
-pub fn GetNodeRaw(comptime options: ParseOptions) type {
-    return options.GetNodeRaw();
-}
-
-/// Returns the query iterator type specialized for `options`.
-pub fn GetQueryIter(comptime options: ParseOptions) type {
-    return options.QueryIter();
+/// Parses `input` into a freshly initialized document and returns it.
+/// The returned document borrows `input`, so `input` must outlive the document.
+pub fn parse(comptime options: ParseOptions, allocator: std.mem.Allocator, input: options.GetInput()) !options.GetDocument() {
+    const Document = options.GetDocument();
+    var doc = Document.init(allocator);
+    errdefer doc.deinit();
+    try doc.parse(input);
+    return doc;
 }
 
 test "smoke parse/query" {
@@ -68,6 +63,30 @@ test "smoke parse/query" {
     const parent = span.parentNode() orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("div", parent.tagName());
     try std.testing.expect(doc.queryOne("div > span.k") != null);
+}
+
+test "top-level parse helper (destructive)" {
+    const alloc = std.testing.allocator;
+    const opts: ParseOptions = .{};
+
+    var src = "<div id='a'><span>v</span></div>".*;
+    var doc = try parse(opts, alloc, &src);
+    defer doc.deinit();
+
+    try std.testing.expect(doc.queryOne("div#a > span") != null);
+}
+
+test "top-level parse helper (non-destructive)" {
+    const alloc = std.testing.allocator;
+    const opts: ParseOptions = .{ .non_destructive = true };
+
+    const src = "<div id='a' data-v='x&amp;y'>x</div>";
+    var doc = try parse(opts, alloc, src);
+    defer doc.deinit();
+
+    const div = doc.queryOne("div#a") orelse return error.TestUnexpectedResult;
+    const v = div.getAttributeValue("data-v") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("x&y", v);
 }
 
 test "writeHtml serializes node subtree" {
