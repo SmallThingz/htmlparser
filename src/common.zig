@@ -159,11 +159,6 @@ pub const QueryDebugReport = struct {
     }
 };
 
-/// True when node kind should participate in element-only traversal.
-pub inline fn isElementLike(kind: anytype) bool {
-    return kind == .element;
-}
-
 /// Parent element index for `node_index`, excluding root-document index 0.
 pub fn parentElement(doc: anytype, node_index: IndexInt) ?IndexInt {
     const p = doc.parentIndex(node_index);
@@ -175,7 +170,7 @@ pub fn parentElement(doc: anytype, node_index: IndexInt) ?IndexInt {
 pub fn prevElementSibling(doc: anytype, node_index: IndexInt) ?IndexInt {
     var prev = doc.nodes.items[node_index].prev_sibling;
     while (prev != InvalidIndex) : (prev = doc.nodes.items[prev].prev_sibling) {
-        if (isElementLike(doc.nodes.items[prev].kind)) return prev;
+        if (doc.isElementIndex(prev)) return prev;
     }
     return null;
 }

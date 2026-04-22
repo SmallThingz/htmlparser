@@ -190,14 +190,14 @@ fn runParseTagsFile(io: std.Io, alloc: std.mem.Allocator, mode: ParseMode, fixtu
 
     switch (parsed) {
         .strictest => |*fixture| {
-            for (fixture.doc.nodes.items) |*n| {
-                if (n.kind != .element) continue;
+            for (fixture.doc.nodes.items, 0..) |*n, idx| {
+                if (idx == 0 or n.attr_end == 0) continue;
                 try tags.append(alloc, n.name_or_text.slice(fixture.doc.source));
             }
         },
         .fastest => |*fixture| {
-            for (fixture.doc.nodes.items) |*n| {
-                if (n.kind != .element) continue;
+            for (fixture.doc.nodes.items, 0..) |*n, idx| {
+                if (idx == 0 or n.attr_end == 0) continue;
                 try tags.append(alloc, n.name_or_text.slice(fixture.doc.source));
             }
         },

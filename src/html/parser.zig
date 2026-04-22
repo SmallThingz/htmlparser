@@ -53,7 +53,6 @@ fn Parser(comptime opts: ParseOptions) type {
             try self.reserveCapacities();
 
             _ = try self.pushNode(.{
-                .kind = .document,
                 .subtree_end = 0,
             });
             try self.pushStack(0, 0, 0);
@@ -395,7 +394,6 @@ fn Parser(comptime opts: ParseOptions) type {
         fn appendTextNode(noalias self: *Self, parent_idx: IndexInt) !IndexInt {
             const idx: IndexInt = @intCast(self.doc.nodes.items.len);
             const node: @TypeOf(self.doc.nodes.items[0]) = .{
-                .kind = .text,
                 .parent = parent_idx,
                 .subtree_end = idx,
             };
@@ -406,7 +404,6 @@ fn Parser(comptime opts: ParseOptions) type {
         fn appendElementNode(noalias self: *Self, parent_idx: IndexInt) !IndexInt {
             const idx: IndexInt = @intCast(self.doc.nodes.items.len);
             const node: @TypeOf(self.doc.nodes.items[0]) = .{
-                .kind = .element,
                 .parent = parent_idx,
                 .subtree_end = idx,
             };
@@ -576,12 +573,14 @@ fn expectDocumentStructureValid(doc: anytype) !void {
     const testing = std.testing;
     const nodes = doc.nodes.items;
     try testing.expect(nodes.len >= 1);
-    try testing.expect(nodes[0].kind == .document);
+    try testing.expect(nodes[0].attr_end == 0);
     try testing.expect(nodes[0].parent == InvalidIndex);
     try testing.expectEqual(@as(IndexInt, @intCast(nodes.len - 1)), nodes[0].subtree_end);
 
     for (nodes, 0..) |node, i| {
         const idx: IndexInt = @intCast(i);
+        const is_text = idx != 0 and node.attr_end == 0;
+        const is_element = idx != 0 and node.attr_end != 0;
         const span_start: usize = @intCast(node.name_or_text.start);
         const span_end: usize = @intCast(node.name_or_text.end);
 
@@ -590,7 +589,7 @@ fn expectDocumentStructureValid(doc: anytype) !void {
         try testing.expect(node.subtree_end >= idx);
         try testing.expect(@as(usize, @intCast(node.subtree_end)) < nodes.len);
 
-        if (node.kind == .element) {
+        if (is_element) {
             const attr_end: usize = @intCast(node.attr_end);
             try testing.expect(span_end <= attr_end);
             try testing.expect(attr_end <= doc.source.len);
@@ -601,7 +600,7 @@ fn expectDocumentStructureValid(doc: anytype) !void {
         } else {
             const parent_idx: usize = @intCast(node.parent);
             try testing.expect(parent_idx < nodes.len);
-            try testing.expect(nodes[parent_idx].kind != .text);
+            try testing.expect(parent_idx == 0 or nodes[parent_idx].attr_end != 0);
             try testing.expect(nodes[parent_idx].subtree_end >= idx);
         }
 
@@ -614,13 +613,13 @@ fn expectDocumentStructureValid(doc: anytype) !void {
 
         if (node.last_child != InvalidIndex) {
             const last_child_idx: usize = @intCast(node.last_child);
-            try testing.expect(node.kind != .text);
+            try testing.expect(!is_text);
             try testing.expect(last_child_idx > i);
             try testing.expect(last_child_idx <= @as(usize, @intCast(node.subtree_end)));
             try testing.expectEqual(idx, nodes[last_child_idx].parent);
             try testing.expect(i + 1 < nodes.len);
             try testing.expectEqual(idx, nodes[i + 1].parent);
-        } else if (node.kind == .text) {
+        } else if (is_text) {
             try testing.expectEqual(InvalidIndex, node.last_child);
         }
     }
@@ -631,7 +630,6 @@ fn expectEquivalentStructures(a: *const TestDocument, b: *const NonDestructiveTe
     try testing.expectEqual(a.nodes.items.len, b.nodes.items.len);
 
     for (a.nodes.items, b.nodes.items) |lhs, rhs| {
-        try testing.expectEqual(lhs.kind, rhs.kind);
         try testing.expectEqual(lhs.name_or_text.start, rhs.name_or_text.start);
         try testing.expectEqual(lhs.name_or_text.end, rhs.name_or_text.end);
         try testing.expectEqual(lhs.attr_end, rhs.attr_end);
@@ -677,7 +675,7 @@ fn exerciseRuntimeApis(doc: anytype, alloc: std.mem.Allocator) !void {
         const node = doc.nodeAt(@intCast(idx)) orelse continue;
         var arena = std.heap.ArenaAllocator.init(alloc);
         defer arena.deinit();
-        if (doc.nodes.items[idx].kind == .element) {
+        if (doc.isElementIndex(@intCast(idx))) {
             if (comptime @FieldType(@TypeOf(doc.*), "source") == []const u8) {
                 _ = node.getAttributeValueAlloc(arena.allocator(), "id");
                 _ = node.getAttributeValueAlloc(arena.allocator(), "class");
@@ -933,7 +931,7 @@ test "raw text element metadata remains valid after child append growth" {
     try std.testing.expect(script.raw().subtree_end > script.index);
 
     const text_node = doc.nodes.items[script.index + 1];
-    try std.testing.expect(text_node.kind == .text);
+    try std.testing.expect(text_node.attr_end == 0);
     try std.testing.expectEqualStrings("const x = 1;", text_node.name_or_text.slice(doc.source));
 
     const div = doc.queryOne("div") orelse return error.TestUnexpectedResult;

@@ -21,20 +21,6 @@ const IndexInt = common.IndexInt;
 /// Sentinel used for missing node indexes and invalid spans.
 pub const InvalidIndex: IndexInt = common.InvalidIndex;
 
-/// Stored node kind in the raw DOM backing arrays.
-pub const NodeType = enum(u3) {
-    document,
-    element,
-    text,
-
-    /// Formats this node type for human-readable output.
-    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
-        try writer.writeAll(@tagName(self));
-    }
-};
-
-const isElementLike = common.isElementLike;
-
 /// Compile-time parser options and type factory for generated public API types.
 pub const ParseOptions = struct {
     /// Drops whitespace-only text nodes during parse when throughput matters more
@@ -62,14 +48,12 @@ pub const ParseOptions = struct {
     pub fn GetNodeRaw(_: @This()) type {
         return struct {
             //! Backing node storage record for parsed DOM state.
-            /// Stored node kind.
-            kind: NodeType,
-
             /// Tag-name span for elements or text span for text nodes.
             name_or_text: Span = .{},
 
             /// End of the raw attribute byte span for element nodes.
             /// Attribute bytes begin at `name_or_text.end`.
+            /// `0` marks non-element nodes (document root at index 0, or text).
             attr_end: IndexInt = 0,
 
             /// Last direct child index. The first child is derived from `index + 1`.
@@ -148,7 +132,7 @@ pub const ParseOptions = struct {
                 const node_raw = &doc.nodes.items[self.index];
 
                 if (comptime options.non_destructive) {
-                    if (node_raw.kind == .text) {
+                    if (doc.isTextIndex(self.index)) {
                         const text = node_raw.name_or_text.slice(doc.source);
                         if (!opts.normalize_whitespace and std.mem.indexOfScalar(u8, text, '&') == null) return text;
                         return self.innerTextOwnedWithOptions(arena_alloc, opts);
@@ -159,7 +143,7 @@ pub const ParseOptions = struct {
                     var idx = self.index + 1;
                     while (idx <= node_raw.subtree_end and idx < doc.nodes.items.len) : (idx += 1) {
                         const node = &doc.nodes.items[idx];
-                        if (node.kind != .text) continue;
+                        if (!doc.isTextIndex(idx)) continue;
                         text_count += 1;
                         if (text_count == 1) first_text = node.name_or_text.slice(doc.source);
                         if (text_count > 1) break;
@@ -171,7 +155,7 @@ pub const ParseOptions = struct {
                     }
                     return self.innerTextOwnedWithOptions(arena_alloc, opts);
                 } else {
-                    if (node_raw.kind == .text) {
+                    if (doc.isTextIndex(self.index)) {
                         const mut_node = &doc.nodes.items[self.index];
                         _ = decodeTextNode(mut_node, doc);
                         if (!opts.normalize_whitespace) return mut_node.name_or_text.slice(doc.source);
@@ -184,7 +168,7 @@ pub const ParseOptions = struct {
                     var idx = self.index + 1;
                     while (idx <= node_raw.subtree_end and idx < doc.nodes.items.len) : (idx += 1) {
                         const node = &doc.nodes.items[idx];
-                        if (node.kind != .text) continue;
+                        if (!doc.isTextIndex(idx)) continue;
                         count += 1;
                         _ = decodeTextNode(node, doc);
                         if (count == 1) first_idx = idx;
@@ -204,7 +188,7 @@ pub const ParseOptions = struct {
                         idx = self.index + 1;
                         while (idx <= node_raw.subtree_end and idx < doc.nodes.items.len) : (idx += 1) {
                             const node = &doc.nodes.items[idx];
-                            if (node.kind != .text) continue;
+                            if (!doc.isTextIndex(idx)) continue;
                             const seg = node.name_or_text.slice(doc.source);
                             try ensureOutExtra(&out, arena_alloc, seg.len);
                             out.appendSliceAssumeCapacity(seg);
@@ -214,7 +198,7 @@ pub const ParseOptions = struct {
                         idx = self.index + 1;
                         while (idx <= node_raw.subtree_end and idx < doc.nodes.items.len) : (idx += 1) {
                             const node = &doc.nodes.items[idx];
-                            if (node.kind != .text) continue;
+                            if (!doc.isTextIndex(idx)) continue;
                             try appendNormalizedSegment(&out, arena_alloc, node.name_or_text.slice(doc.source), &state);
                         }
                     }
@@ -237,7 +221,7 @@ pub const ParseOptions = struct {
                 var out = std.ArrayList(u8).empty;
                 defer out.deinit(arena_alloc);
 
-                if (node_raw.kind == .text) {
+                if (doc.isTextIndex(self.index)) {
                     const text = node_raw.name_or_text.slice(doc.source);
                     if (!opts.normalize_whitespace) {
                         try appendDecodedSegment(&out, arena_alloc, text);
@@ -252,7 +236,7 @@ pub const ParseOptions = struct {
                     var idx = self.index + 1;
                     while (idx <= node_raw.subtree_end and idx < doc.nodes.items.len) : (idx += 1) {
                         const node = &doc.nodes.items[idx];
-                        if (node.kind != .text) continue;
+                        if (!doc.isTextIndex(idx)) continue;
                         try appendDecodedSegment(&out, arena_alloc, node.name_or_text.slice(doc.source));
                     }
                     return try out.toOwnedSlice(arena_alloc);
@@ -262,7 +246,7 @@ pub const ParseOptions = struct {
                 var idx = self.index + 1;
                 while (idx <= node_raw.subtree_end and idx < doc.nodes.items.len) : (idx += 1) {
                     const node = &doc.nodes.items[idx];
-                    if (node.kind != .text) continue;
+                    if (!doc.isTextIndex(idx)) continue;
                     try appendDecodedNormalizedSegment(&out, arena_alloc, node.name_or_text.slice(doc.source), &state);
                 }
                 return try out.toOwnedSlice(arena_alloc);
@@ -295,8 +279,7 @@ pub const ParseOptions = struct {
                 const node_raw = &self.doc.nodes.items[self.index];
                 var idx = node_raw.last_child;
                 while (idx != InvalidIndex) : (idx = self.doc.nodes.items[idx].prev_sibling) {
-                    const c = &self.doc.nodes.items[idx];
-                    if (isElementLike(c.kind)) return self.doc.nodeAt(idx);
+                    if (self.doc.isElementIndex(idx)) return self.doc.nodeAt(idx);
                 }
                 return null;
             }
@@ -313,8 +296,7 @@ pub const ParseOptions = struct {
                 const node_raw = &self.doc.nodes.items[self.index];
                 var idx = node_raw.prev_sibling;
                 while (idx != InvalidIndex) : (idx = self.doc.nodes.items[idx].prev_sibling) {
-                    const c = &self.doc.nodes.items[idx];
-                    if (isElementLike(c.kind)) return self.doc.nodeAt(idx);
+                    if (self.doc.isElementIndex(idx)) return self.doc.nodeAt(idx);
                 }
                 return null;
             }
@@ -407,38 +389,44 @@ pub const ParseOptions = struct {
             }
 
             fn writeNodeHtml(doc: anytype, idx: IndexInt, noalias node_raw: anytype, writer: anytype) WriterError(@TypeOf(writer))!void {
-                switch (node_raw.kind) {
-                    .document => try writeChildrenHtml(doc, idx, node_raw, writer),
-                    .text => try writer.writeAll(node_raw.name_or_text.slice(doc.source)),
-                    .element => {
-                        const name = node_raw.name_or_text.slice(doc.source);
-                        try writeByte(writer, '<');
-                        try writer.writeAll(name);
-                        try writeAttrsHtml(doc, node_raw, writer);
-                        try writeByte(writer, '>');
+                if (idx == 0) {
+                    try writeChildrenHtml(doc, idx, node_raw, writer);
+                    return;
+                }
+                if (node_raw.attr_end == 0) {
+                    try writer.writeAll(node_raw.name_or_text.slice(doc.source));
+                    return;
+                }
 
-                        if (!tags.isVoidTagWithKey(name, tags.first8Key(name))) {
-                            try writeChildrenHtml(doc, idx, node_raw, writer);
-                            try writer.writeAll("</");
-                            try writer.writeAll(name);
-                            try writeByte(writer, '>');
-                        }
-                    },
+                const name = node_raw.name_or_text.slice(doc.source);
+                try writeByte(writer, '<');
+                try writer.writeAll(name);
+                try writeAttrsHtml(doc, node_raw, writer);
+                try writeByte(writer, '>');
+
+                if (!tags.isVoidTagWithKey(name, tags.first8Key(name))) {
+                    try writeChildrenHtml(doc, idx, node_raw, writer);
+                    try writer.writeAll("</");
+                    try writer.writeAll(name);
+                    try writeByte(writer, '>');
                 }
             }
 
             fn writeNodeHtmlSelf(doc: anytype, idx: IndexInt, noalias node_raw: anytype, writer: anytype) WriterError(@TypeOf(writer))!void {
-                switch (node_raw.kind) {
-                    .document => try writeChildrenHtml(doc, idx, node_raw, writer),
-                    .text => try writer.writeAll(node_raw.name_or_text.slice(doc.source)),
-                    .element => {
-                        const name = node_raw.name_or_text.slice(doc.source);
-                        try writeByte(writer, '<');
-                        try writer.writeAll(name);
-                        try writeAttrsHtml(doc, node_raw, writer);
-                        try writeByte(writer, '>');
-                    },
+                if (idx == 0) {
+                    try writeChildrenHtml(doc, idx, node_raw, writer);
+                    return;
                 }
+                if (node_raw.attr_end == 0) {
+                    try writer.writeAll(node_raw.name_or_text.slice(doc.source));
+                    return;
+                }
+
+                const name = node_raw.name_or_text.slice(doc.source);
+                try writeByte(writer, '<');
+                try writer.writeAll(name);
+                try writeAttrsHtml(doc, node_raw, writer);
+                try writeByte(writer, '>');
             }
 
             fn writeChildrenHtml(doc: anytype, parent_idx: IndexInt, noalias node_raw: anytype, writer: anytype) WriterError(@TypeOf(writer))!void {
@@ -717,8 +705,7 @@ pub const ParseOptions = struct {
                         if (idx <= self.scope_root or idx > root.subtree_end) continue;
                     }
 
-                    const node = &self.doc.nodes.items[idx];
-                    if (!isElementLike(node.kind)) continue;
+                    if (!self.doc.isElementIndex(idx)) continue;
 
                     if (matcher.matchesSelectorAt(DocType, self.doc, self.selector, idx, self.scope_root)) {
                         self.next_index += 1;
@@ -980,6 +967,21 @@ pub const ParseOptions = struct {
                 return self.nodes.items[idx].parent;
             }
 
+            /// Returns whether `idx` is the document root node.
+            pub inline fn isDocumentIndex(_: *const DocSelf, idx: IndexInt) bool {
+                return idx == 0;
+            }
+
+            /// Returns whether `idx` is an element node.
+            pub inline fn isElementIndex(self: *const DocSelf, idx: IndexInt) bool {
+                return idx != 0 and idx < self.nodes.items.len and self.nodes.items[idx].attr_end != 0;
+            }
+
+            /// Returns whether `idx` is a text node.
+            pub inline fn isTextIndex(self: *const DocSelf, idx: IndexInt) bool {
+                return idx != 0 and idx < self.nodes.items.len and self.nodes.items[idx].attr_end == 0;
+            }
+
             /// Returns first `<html>` element in the document.
             pub fn html(self: *const DocSelf) ?NodeTypeWrapper {
                 return self.findFirstTag("html");
@@ -1010,7 +1012,7 @@ pub const ParseOptions = struct {
                 var i: usize = 1;
                 while (i < self.nodes.items.len) : (i += 1) {
                     const n = &self.nodes.items[i];
-                    if (!isElementLike(n.kind)) continue;
+                    if (!self.isElementIndex(@intCast(i))) continue;
                     if (tables.eqlIgnoreCaseAscii(n.name_or_text.slice(self.source), name)) return self.nodeAt(@intCast(i));
                 }
                 return null;
@@ -1056,8 +1058,8 @@ pub const ParseOptions = struct {
                 if (candidate1 >= self.nodes.items.len) return InvalidIndex;
 
                 const node1 = &self.nodes.items[candidate1];
-                if (node1.kind != .text) {
-                    if (node1.parent == parent_idx and isElementLike(node1.kind)) return candidate1;
+                if (self.isElementIndex(candidate1)) {
+                    if (node1.parent == parent_idx) return candidate1;
                     return InvalidIndex;
                 }
 
@@ -1065,16 +1067,16 @@ pub const ParseOptions = struct {
                 if (candidate2 >= self.nodes.items.len) return InvalidIndex;
 
                 const node2 = &self.nodes.items[candidate2];
-                if (node2.kind == .text) {
+                if (self.isTextIndex(candidate2)) {
                     @branchHint(.cold);
                     var scan: IndexInt = candidate2;
-                    while (scan < self.nodes.items.len and self.nodes.items[scan].kind == .text) : (scan += 1) {}
+                    while (scan < self.nodes.items.len and self.isTextIndex(scan)) : (scan += 1) {}
                     if (scan >= self.nodes.items.len) return InvalidIndex;
                     const scanned = &self.nodes.items[scan];
-                    if (scanned.parent == parent_idx and isElementLike(scanned.kind)) return scan;
+                    if (scanned.parent == parent_idx and self.isElementIndex(scan)) return scan;
                     return InvalidIndex;
                 }
-                if (node2.parent == parent_idx and isElementLike(node2.kind)) return candidate2;
+                if (node2.parent == parent_idx and self.isElementIndex(candidate2)) return candidate2;
                 return InvalidIndex;
             }
 
@@ -1082,7 +1084,7 @@ pub const ParseOptions = struct {
             pub fn nextElementSiblingIndex(self: *const DocSelf, node_idx: IndexInt) IndexInt {
                 if (node_idx >= self.nodes.items.len) return InvalidIndex;
                 const node = &self.nodes.items[node_idx];
-                if (!isElementLike(node.kind)) return InvalidIndex;
+                if (!self.isElementIndex(node_idx)) return InvalidIndex;
                 const parent_idx = node.parent;
                 if (parent_idx == InvalidIndex) return InvalidIndex;
 
@@ -1090,8 +1092,8 @@ pub const ParseOptions = struct {
                 while (candidate < self.nodes.items.len) : (candidate += 1) {
                     const cand = &self.nodes.items[candidate];
                     if (cand.parent != parent_idx) return InvalidIndex;
-                    if (isElementLike(cand.kind)) return candidate;
-                    if (cand.kind != .text) return InvalidIndex;
+                    if (self.isElementIndex(candidate)) return candidate;
+                    if (!self.isTextIndex(candidate)) return InvalidIndex;
                 }
                 return InvalidIndex;
             }
@@ -1157,6 +1159,7 @@ test "document type excludes parser-only and shadow-source state" {
     try std.testing.expect(!@hasField(Document, "original_source"));
     try std.testing.expect(!@hasField(Document, "owned_shadow_source"));
     try std.testing.expect(!@hasField(Document, "mutable_source"));
+    try std.testing.expect(!@hasField(NodeRaw, "kind"));
     try std.testing.expect(!@hasDecl(ParseOptions, "GetOpenElem"));
 }
 
@@ -1597,7 +1600,7 @@ test "parse-time text normalization is off by default and query-time normalizati
 
     const node = doc.queryOne("#x") orelse return error.TestUnexpectedResult;
     const text_node = doc.nodes.items[node.index + 1];
-    try std.testing.expect(text_node.kind == .text);
+    try std.testing.expect(text_node.attr_end == 0);
     try std.testing.expectEqualStrings("  alpha  &amp;   beta  ", text_node.name_or_text.slice(doc.source));
 
     const raw = try node.innerTextWithOptions(arena.allocator(), .{ .normalize_whitespace = false });
@@ -1658,7 +1661,7 @@ test "innerTextOwned always returns allocated output and does not mutate source 
 
     const node = doc.queryOne("#x") orelse return error.TestUnexpectedResult;
     const text_node_before = doc.nodes.items[node.index + 1];
-    try std.testing.expect(text_node_before.kind == .text);
+    try std.testing.expect(text_node_before.attr_end == 0);
     try std.testing.expectEqualStrings("a &amp; b", text_node_before.name_or_text.slice(doc.source));
 
     const owned = try node.innerTextOwned(arena.allocator());
@@ -2360,10 +2363,6 @@ test "instrumentation wrappers invoke compile-time hooks and preserve results" {
 
 test "format document types" {
     const alloc = std.testing.allocator;
-
-    const node_type_out = try std.fmt.allocPrint(alloc, "{f}", .{NodeType.element});
-    defer alloc.free(node_type_out);
-    try std.testing.expectEqualStrings("element", node_type_out);
 
     const opts: ParseOptions = .{ .drop_whitespace_text_nodes = false };
     const opts_out = try std.fmt.allocPrint(alloc, "{f}", .{opts});

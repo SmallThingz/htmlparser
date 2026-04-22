@@ -26,8 +26,7 @@ pub fn explainFirstMatch(
 
     var i = bounds.start;
     while (i < bounds.end_excl and i < doc.nodes.items.len) : (i += 1) {
-        const node = &doc.nodes.items[i];
-        if (!common.isElementLike(node.kind)) continue;
+        if (!doc.isElementIndex(i)) continue;
         report.visited_elements += 1;
 
         var first_failure: selector_debug.Failure = .{};

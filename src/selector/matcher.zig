@@ -14,7 +14,6 @@ const InvalidIndex: IndexInt = common.InvalidIndex;
 const MaxProbeEntries: usize = 24;
 const MaxCollectedAttrs: usize = 24;
 const LocalMatchFrameCap: usize = 48;
-const isElementLike = common.isElementLike;
 const matchesScopeAnchor = common.matchesScopeAnchor;
 const parentElement = common.parentElement;
 const prevElementSibling = common.prevElementSibling;
@@ -304,16 +303,15 @@ fn firstMatchForGroup(comptime Doc: type, doc: *const Doc, selector: ast.Selecto
     const bounds = traversalBounds(Doc, doc, scope_root);
     var i = bounds.start;
     while (i < bounds.end_excl and i < doc.nodes.items.len) : (i += 1) {
-        const node = &doc.nodes.items[i];
-        if (!isElementLike(node.kind)) continue;
+        if (!doc.isElementIndex(i)) continue;
         if (matchGroupFromRight(Doc, doc, selector, group, rightmost, i, scope_root)) return i;
     }
     return null;
 }
 
 fn matchesCompound(comptime Doc: type, noalias doc: *const Doc, selector: ast.Selector, comp: ast.Compound, node_index: IndexInt) bool {
+    if (!doc.isElementIndex(node_index)) return false;
     const node = &doc.nodes.items[node_index];
-    if (!isElementLike(node.kind)) return false;
     var scratch = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer scratch.deinit();
     const scratch_alloc = scratch.allocator();
