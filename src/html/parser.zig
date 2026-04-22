@@ -163,7 +163,7 @@ fn Parser(comptime opts: ParseOptions) type {
                     if (c >= 'A' and c <= 'Z') {
                         c = tables.lower(c);
                         if (!comptime opts.non_destructive) {
-                            self.doc.mutable_source.?[self.i] = c;
+                            @constCast(self.input)[self.i] = c;
                         }
                     }
                     tag_name_key |= @as(u64, c) << @as(u6, @intCast(tag_name_key_len * 8));
@@ -327,7 +327,7 @@ fn Parser(comptime opts: ParseOptions) type {
                     if (c >= 'A' and c <= 'Z') {
                         c = tables.lower(c);
                         if (!comptime opts.non_destructive) {
-                            self.doc.mutable_source.?[self.i] = c;
+                            @constCast(self.input)[self.i] = c;
                         }
                     }
                     close_key |= @as(u64, c) << @as(u6, @intCast(close_key_len * 8));

@@ -8,7 +8,7 @@ const ExtendedGapSentinel = 0xff;
 const ExtendedGapHeaderLen = 2 + @sizeOf(IndexInt);
 
 // SAFETY: Attribute helpers operate within caller-provided node/span bounds.
-// Destructive mode mutates `doc.mutable_source` in place for lazy decode.
+// Destructive mode mutates `doc.source` in place for lazy decode.
 // Non-destructive mode scans `doc.source` read-only and allocates only when a
 // decoded value cannot be represented as a direct source slice.
 
@@ -159,14 +159,19 @@ pub fn nativeEndian() std.builtin.Endian {
     return @import("builtin").cpu.arch.endian();
 }
 
+inline fn hasConstSource(comptime Doc: type) bool {
+    return @FieldType(Doc, "source") == []const u8;
+}
+
 /// Returns attribute value by name from in-place attribute bytes, decoding lazily.
 pub fn getAttrValue(noalias doc_ptr: anytype, node: anytype, name: []const u8) ?[]const u8 {
-    const mut_doc = @constCast(doc_ptr);
-    if (mut_doc.mutable_source == null) {
-        return getAttrValueNonDestructive(mut_doc, node, name);
+    const Doc = @TypeOf(doc_ptr.*);
+    if (comptime hasConstSource(Doc)) {
+        return getAttrValueNonDestructive(doc_ptr, node, name);
     }
 
-    const source: []u8 = mut_doc.mutable_source.?;
+    const mut_doc = @constCast(doc_ptr);
+    const source: []u8 = mut_doc.source;
     const lookup_kind = classifyLookupName(name);
 
     var i: usize = node.name_or_text.end;
@@ -230,17 +235,18 @@ pub fn getAttrValue(noalias doc_ptr: anytype, node: anytype, name: []const u8) ?
 
 /// One-pass multi-attribute collector used by matcher hot paths.
 pub fn collectSelectedValues(noalias doc_ptr: anytype, node: anytype, selected_names: []const []const u8, out_values: []?[]const u8) void {
-    const mut_doc = @constCast(doc_ptr);
-    if (mut_doc.mutable_source == null) {
+    const Doc = @TypeOf(doc_ptr.*);
+    if (comptime hasConstSource(Doc)) {
         var idx: usize = 0;
         while (idx < selected_names.len) : (idx += 1) {
             if (out_values[idx] != null) continue;
-            out_values[idx] = getAttrValueNonDestructive(mut_doc, node, selected_names[idx]);
+            out_values[idx] = getAttrValueNonDestructive(doc_ptr, node, selected_names[idx]);
         }
         return;
     }
 
-    const source: []u8 = mut_doc.mutable_source.?;
+    const mut_doc = @constCast(doc_ptr);
+    const source: []u8 = mut_doc.source;
     if (selected_names.len == 0) return;
     if (selected_names.len != out_values.len) return;
 
@@ -360,7 +366,8 @@ fn materializeRawValueOwned(doc: anytype, source: []const u8, raw: RawValue) []c
     const slice = source[raw.start..raw.end];
     if (std.mem.indexOfScalar(u8, slice, '&') == null) return slice;
 
-    const arena = doc.ensureDecodedValueArena();
+    const mut_doc = @constCast(doc);
+    const arena = mut_doc.ensureDecodedValueArena();
     const alloc = arena.allocator();
     const copied = alloc.dupe(u8, slice) catch return slice;
     const new_len = entities.decodeInPlace(copied);

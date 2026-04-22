@@ -14,7 +14,7 @@ const common = @import("../common.zig");
 const IndexInt = common.IndexInt;
 
 // SAFETY: Document retains the parsed source reference for the life of
-// nodes/iterators. In destructive mode `mutable_source` aliases the caller's
+// nodes/iterators. In destructive mode `source` aliases the caller's
 // writable buffer. Node spans and indices are validated on parse; helpers guard
 // against InvalidIndex and out-of-range indexes.
 
@@ -155,7 +155,7 @@ pub const ParseOptions = struct {
                 const doc = self.doc;
                 const node_raw = &doc.nodes.items[self.index];
 
-                if (doc.mutable_source == null) {
+                if (comptime options.non_destructive) {
                     if (node_raw.kind == .text) {
                         const text = node_raw.name_or_text.slice(doc.source);
                         if (!opts.normalize_whitespace and std.mem.indexOfScalar(u8, text, '&') == null) return text;
@@ -178,58 +178,58 @@ pub const ParseOptions = struct {
                         return first_text.?;
                     }
                     return self.innerTextOwnedWithOptions(arena_alloc, opts);
-                }
-
-                if (node_raw.kind == .text) {
-                    const mut_node = &doc.nodes.items[self.index];
-                    _ = decodeTextNode(mut_node, doc);
-                    if (!opts.normalize_whitespace) return mut_node.name_or_text.slice(doc.source);
-                    return normalizeTextNodeInPlace(mut_node, doc);
-                }
-
-                var first_idx: IndexInt = InvalidIndex;
-                var count: usize = 0;
-
-                var idx = self.index + 1;
-                while (idx <= node_raw.subtree_end and idx < doc.nodes.items.len) : (idx += 1) {
-                    const node = &doc.nodes.items[idx];
-                    if (node.kind != .text) continue;
-                    count += 1;
-                    _ = decodeTextNode(node, doc);
-                    if (count == 1) first_idx = idx;
-                }
-
-                if (count == 0) return "";
-                if (count == 1) {
-                    const only = &doc.nodes.items[first_idx];
-                    if (!opts.normalize_whitespace) return only.name_or_text.slice(doc.source);
-                    return normalizeTextNodeInPlace(only, doc);
-                }
-
-                var out = std.ArrayList(u8).empty;
-                defer out.deinit(arena_alloc);
-
-                if (!opts.normalize_whitespace) {
-                    idx = self.index + 1;
-                    while (idx <= node_raw.subtree_end and idx < doc.nodes.items.len) : (idx += 1) {
-                        const node = &doc.nodes.items[idx];
-                        if (node.kind != .text) continue;
-                        const seg = node.name_or_text.slice(doc.source);
-                        try ensureOutExtra(&out, arena_alloc, seg.len);
-                        out.appendSliceAssumeCapacity(seg);
-                    }
                 } else {
-                    var state: WhitespaceNormState = .{};
-                    idx = self.index + 1;
+                    if (node_raw.kind == .text) {
+                        const mut_node = &doc.nodes.items[self.index];
+                        _ = decodeTextNode(mut_node, doc);
+                        if (!opts.normalize_whitespace) return mut_node.name_or_text.slice(doc.source);
+                        return normalizeTextNodeInPlace(mut_node, doc);
+                    }
+
+                    var first_idx: IndexInt = InvalidIndex;
+                    var count: usize = 0;
+
+                    var idx = self.index + 1;
                     while (idx <= node_raw.subtree_end and idx < doc.nodes.items.len) : (idx += 1) {
                         const node = &doc.nodes.items[idx];
                         if (node.kind != .text) continue;
-                        try appendNormalizedSegment(&out, arena_alloc, node.name_or_text.slice(doc.source), &state);
+                        count += 1;
+                        _ = decodeTextNode(node, doc);
+                        if (count == 1) first_idx = idx;
                     }
-                }
 
-                if (out.items.len == 0) return "";
-                return try out.toOwnedSlice(arena_alloc);
+                    if (count == 0) return "";
+                    if (count == 1) {
+                        const only = &doc.nodes.items[first_idx];
+                        if (!opts.normalize_whitespace) return only.name_or_text.slice(doc.source);
+                        return normalizeTextNodeInPlace(only, doc);
+                    }
+
+                    var out = std.ArrayList(u8).empty;
+                    defer out.deinit(arena_alloc);
+
+                    if (!opts.normalize_whitespace) {
+                        idx = self.index + 1;
+                        while (idx <= node_raw.subtree_end and idx < doc.nodes.items.len) : (idx += 1) {
+                            const node = &doc.nodes.items[idx];
+                            if (node.kind != .text) continue;
+                            const seg = node.name_or_text.slice(doc.source);
+                            try ensureOutExtra(&out, arena_alloc, seg.len);
+                            out.appendSliceAssumeCapacity(seg);
+                        }
+                    } else {
+                        var state: WhitespaceNormState = .{};
+                        idx = self.index + 1;
+                        while (idx <= node_raw.subtree_end and idx < doc.nodes.items.len) : (idx += 1) {
+                            const node = &doc.nodes.items[idx];
+                            if (node.kind != .text) continue;
+                            try appendNormalizedSegment(&out, arena_alloc, node.name_or_text.slice(doc.source), &state);
+                        }
+                    }
+
+                    if (out.items.len == 0) return "";
+                    return try out.toOwnedSlice(arena_alloc);
+                }
             }
 
             /// Always materializes subtree text into newly allocated output.
@@ -331,14 +331,16 @@ pub const ParseOptions = struct {
             }
 
             fn decodeTextNode(noalias node: anytype, doc: anytype) []const u8 {
-                const text_mut = node.name_or_text.sliceMut(doc.mutable_source.?);
+                if (comptime options.non_destructive) unreachable;
+                const text_mut = node.name_or_text.sliceMut(doc.source);
                 const new_len = entities.decodeInPlace(text_mut);
                 node.name_or_text.end = node.name_or_text.start + @as(IndexInt, @intCast(new_len));
                 return node.name_or_text.slice(doc.source);
             }
 
             fn normalizeTextNodeInPlace(noalias node: anytype, doc: anytype) []const u8 {
-                const text_mut = node.name_or_text.sliceMut(doc.mutable_source.?);
+                if (comptime options.non_destructive) unreachable;
+                const text_mut = node.name_or_text.sliceMut(doc.source);
                 const new_len = normalizeWhitespaceInPlace(text_mut);
                 node.name_or_text.end = node.name_or_text.start + @as(IndexInt, @intCast(new_len));
                 return node.name_or_text.slice(doc.source);
@@ -488,7 +490,11 @@ pub const ParseOptions = struct {
                     }
 
                     if (delim == 0) {
-                        const parsed = attr.parseParsedValue(doc.mutable_source.?, end, i);
+                        if (comptime options.non_destructive) {
+                            i += 1;
+                            continue;
+                        }
+                        const parsed = attr.parseParsedValue(doc.source, end, i);
                         try writeAttrName(writer, name);
                         try writeAttrValue(writer, parsed.value);
                         i = parsed.next_start;
@@ -810,9 +816,7 @@ pub const ParseOptions = struct {
             /// Allocator used for node storage, selector arenas, and decoded-value scratch.
             allocator: std.mem.Allocator,
             /// Source bytes referenced by node spans.
-            source: []const u8 = &[_]u8{},
-            /// Mutable source view used only by the destructive specialization.
-            mutable_source: ?[]u8 = null,
+            source: options.GetInput(),
 
             /// Parsed node storage.
             nodes: std.ArrayListUnmanaged(RawNodeType) = .empty,
@@ -843,6 +847,7 @@ pub const ParseOptions = struct {
             pub fn init(allocator: std.mem.Allocator) DocSelf {
                 return .{
                     .allocator = allocator,
+                    .source = emptySource(),
                 };
             }
 
@@ -857,8 +862,7 @@ pub const ParseOptions = struct {
 
             /// Clears parsed state while retaining reusable capacities.
             pub fn clear(noalias self: *DocSelf) void {
-                self.source = &[_]u8{};
-                self.mutable_source = null;
+                self.source = emptySource();
                 self.nodes.clearRetainingCapacity();
                 if (self.query_one_arena) |*arena| _ = arena.reset(.retain_capacity);
                 if (self.query_all_arena) |*arena| _ = arena.reset(.retain_capacity);
@@ -876,14 +880,14 @@ pub const ParseOptions = struct {
                 self.clear();
                 self.source = input;
                 self.query_accel_budget_bytes = @max(input.len / QueryAccelBudgetDivisor, QueryAccelMinBudgetBytes);
-
-                if (comptime options.non_destructive) {
-                    try parser.parseInto(options, self, input);
-                    return;
-                }
-
-                self.mutable_source = input;
                 try parser.parseInto(options, self, input);
+            }
+
+            fn emptySource() options.GetInput() {
+                if (comptime options.non_destructive) {
+                    return &[_]u8{};
+                }
+                return @constCast(@as([]const u8, &[_]u8{}));
             }
 
             /// Returns first matching element for comptime selector.
@@ -1306,7 +1310,13 @@ test "document type excludes parser-only and shadow-source state" {
     try std.testing.expect(!@hasField(Document, "parse_stack"));
     try std.testing.expect(!@hasField(Document, "original_source"));
     try std.testing.expect(!@hasField(Document, "owned_shadow_source"));
+    try std.testing.expect(!@hasField(Document, "mutable_source"));
     try std.testing.expect(!@hasDecl(ParseOptions, "GetOpenElem"));
+}
+
+test "document source type follows parse mode" {
+    try std.testing.expect(@FieldType(Document, "source") == []u8);
+    try std.testing.expect(@FieldType(NonDestructiveDocument, "source") == []const u8);
 }
 
 fn expectIterIds(iter: QueryIter, expected_ids: []const []const u8) !void {
