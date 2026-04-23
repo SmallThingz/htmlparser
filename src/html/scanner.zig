@@ -26,9 +26,13 @@ pub const TextRun = struct {
     has_non_whitespace: bool,
 };
 
-/// Scans from `start` to the next `<`, tracking whether the run contains any non-whitespace bytes.
+/// Scans from `start` to the next `<`, tracking whether the run contains any
+/// non-whitespace bytes.
+///
+/// This is intended for parse paths that drop whitespace-only text nodes. When
+/// whitespace-only text must be preserved, the parser uses a plain `<` search
+/// instead.
 pub fn scanTextRun(hay: []const u8, start: usize) TextRun {
-    // TODO: Make this faster in the case where we don't discard whitespace only nodes
     if (start >= hay.len) return .{ .lt_index = hay.len, .has_non_whitespace = false };
 
     var i = start;

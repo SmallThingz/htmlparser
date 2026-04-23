@@ -87,6 +87,31 @@ test "top-level parse helper (non-destructive)" {
     try std.testing.expectEqualStrings("x&y", v);
 }
 
+test "parse options helper parses directly" {
+    const alloc = std.testing.allocator;
+
+    {
+        const opts: ParseOptions = .{};
+        var src = "<div id='a'><span>v</span></div>".*;
+        var doc = try opts.parse(alloc, &src);
+        defer doc.deinit();
+
+        try std.testing.expect(doc.queryOne("div#a > span") != null);
+    }
+
+    {
+        const opts: ParseOptions = .{ .non_destructive = true };
+        const src = "<div id='b' data-v='x&amp;y'>v</div>";
+        var doc = try opts.parse(alloc, src);
+        defer doc.deinit();
+        var arena = std.heap.ArenaAllocator.init(alloc);
+        defer arena.deinit();
+
+        const div = doc.queryOne("div#b") orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("x&y", div.getAttributeValueAlloc(arena.allocator(), "data-v").?);
+    }
+}
+
 test "writeHtml serializes node subtree" {
     const alloc = std.testing.allocator;
     const opts: ParseOptions = .{};
