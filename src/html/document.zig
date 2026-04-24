@@ -895,14 +895,6 @@ fn GetDocument(comptime options: ParseOptions) type {
             }
         }
 
-        /// Parses HTML using the behavior encoded in this document type.
-        /// Destructive documents parse `[]u8` in place.
-        /// Non-destructive documents accept `[]const u8` and keep lazy decode out of `source`.
-        pub fn parse(noalias self: *DocSelf, input: options.Input()) !void {
-            self.clear();
-            self.* = try options.parse(self.allocator, input);
-        }
-
         fn emptySource() options.Input() {
             if (comptime options.non_destructive) {
                 return &[_]u8{};
@@ -1170,6 +1162,11 @@ const NodeRaw = RawNode;
 /// Re-exported text extraction options used by node text APIs.
 pub const TextOptions = GetNode(.{}).TextOptions;
 
+fn resetParsed(comptime options: ParseOptions, doc: *options.Document(), input: options.Input()) !void {
+    doc.deinit();
+    doc.* = try options.parse(doc.allocator, input);
+}
+
 fn assertNodeTypeLayouts() void {
     _ = @sizeOf(NodeRaw);
     _ = @sizeOf(GetNode(.{}));
@@ -1263,7 +1260,7 @@ fn expectNodeQueryRuntime(scope: GetNode(.{}), selector: []const u8, expected_id
 
 fn parseViaMove(alloc: std.mem.Allocator, input: []u8) !GetDocument(.{}) {
     var doc = GetDocument(.{}).init(alloc);
-    try doc.parse(input);
+    try resetParsed(.{}, &doc, input);
     return doc;
 }
 
@@ -1290,7 +1287,7 @@ test "document parse + query basics" {
     defer doc.deinit();
 
     var html = "<html><head><title>A</title></head><body><div id='x' class='a b'>ok</div><p>n</p></body></html>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     const one = doc.queryOne("div#x") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("div", one.tagName());
@@ -1308,7 +1305,7 @@ test "non-destructive parse preserves caller bytes and formats exact original so
 
     var html = "<div id='x' data-v='a&amp;b'> a &amp; b </div>".*;
     const before = html;
-    try doc.parse(&html);
+    try resetParsed(.{ .non_destructive = true }, &doc, &html);
 
     const node = doc.queryOne("div#x") orelse return error.TestUnexpectedResult;
     const attr_value = node.getAttributeValueAlloc(arena.allocator(), "data-v") orelse return error.TestUnexpectedResult;
@@ -1331,7 +1328,7 @@ test "non-destructive attribute reads do not rewrite attribute bytes" {
 
     var html = "<div id='x' data-v='a&amp;b' data-q='1>2'></div>".*;
     const before = html;
-    try doc.parse(&html);
+    try resetParsed(.{ .non_destructive = true }, &doc, &html);
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
 
@@ -1354,7 +1351,7 @@ test "non-destructive text reads do not rewrite text bytes" {
 
     var html = "<p id='x'> a &amp;  b </p>".*;
     const before = html;
-    try doc.parse(&html);
+    try resetParsed(.{ .non_destructive = true }, &doc, &html);
 
     const node = doc.queryOne("p#x") orelse return error.TestUnexpectedResult;
     const text = try node.innerText(arena.allocator());
@@ -1374,7 +1371,7 @@ test "non-destructive innerText ignores oversized malformed entity prefixes safe
 
     var html = "<div id='x'>&xxxxxxxxxxxxxxxxxxxx&amp;</div>".*;
     const before = html;
-    try doc.parse(&html);
+    try resetParsed(.{ .non_destructive = true }, &doc, &html);
 
     const node = doc.queryOne("#x") orelse return error.TestUnexpectedResult;
     const text = try node.innerText(arena.allocator());
@@ -1388,7 +1385,7 @@ test "runtime queryAll iterator is stable across queryOneRuntime calls" {
     defer doc.deinit();
 
     var html = "<div><span class='x'></span><span class='x'></span></div>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     var runtime_arena = std.heap.ArenaAllocator.init(alloc);
     defer runtime_arena.deinit();
@@ -1408,7 +1405,7 @@ test "runtime queryAll iterators compiled from runtime selectors remain independ
     defer doc.deinit();
 
     var html = "<div><span class='x'></span><span class='y'></span></div>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     var runtime_arena = std.heap.ArenaAllocator.init(alloc);
     defer runtime_arena.deinit();
@@ -1427,7 +1424,7 @@ test "runtime queryAll iterator is invalidated by clear and reparsing" {
     defer doc.deinit();
 
     var html_a = "<div><span class='x'></span></div>".*;
-    try doc.parse(&html_a);
+    try resetParsed(.{}, &doc, &html_a);
 
     var runtime_arena = std.heap.ArenaAllocator.init(alloc);
     defer runtime_arena.deinit();
@@ -1437,7 +1434,7 @@ test "runtime queryAll iterator is invalidated by clear and reparsing" {
     try std.testing.expect(doc.queryOne("span.x") == null);
 
     var html_b = "<div><span class='y'></span></div>".*;
-    try doc.parse(&html_b);
+    try resetParsed(.{}, &doc, &html_b);
     try std.testing.expect(old_it.next() == null);
 
     var new_it = try doc.queryAllRuntime(runtime_arena.allocator(), "span.y");
@@ -1451,7 +1448,7 @@ test "matcher queryOneIndex rejects invalid scope roots safely" {
     defer doc.deinit();
 
     var html = "<div id='x'></div>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     const sel = comptime ast.Selector.compile("div");
     const idx = matcher.queryOneIndex(GetDocument(.{}), &doc, sel, @as(IndexInt, @intCast(doc.nodes.len + 10)));
@@ -1464,7 +1461,7 @@ test "query results matrix (comptime selectors)" {
     defer doc.deinit();
 
     var html = selector_fixture_html.*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     try expectDocQueryComptime(&doc, "li", &.{ "li1", "li2", "li3" });
     try expectDocQueryComptime(&doc, "#li2", &.{"li2"});
@@ -1503,7 +1500,7 @@ test "query results matrix (runtime selectors)" {
     defer doc.deinit();
 
     var html = selector_fixture_html.*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     try expectDocQueryRuntime(&doc, "li", &.{ "li1", "li2", "li3" });
     try expectDocQueryRuntime(&doc, "#li2", &.{"li2"});
@@ -1542,7 +1539,7 @@ test "node-scoped queries return complete descendants only" {
     defer doc.deinit();
 
     var html = selector_fixture_html.*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     const list = doc.queryOne("#list") orelse return error.TestUnexpectedResult;
     try expectNodeQueryComptime(list, "li", &.{ "li1", "li2", "li3" });
@@ -1572,7 +1569,7 @@ test "innerText normalizes whitespace by default" {
     defer arena.deinit();
 
     var html = "<div id='x'>  alpha \n\t beta   gamma  </div>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     const node = doc.queryOne("#x") orelse return error.TestUnexpectedResult;
     const text = try node.innerText(arena.allocator());
@@ -1587,7 +1584,7 @@ test "innerText can return non-normalized text" {
     defer arena.deinit();
 
     var html = "<div id='x'>  alpha \n\t beta   gamma  </div>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     const node = doc.queryOne("#x") orelse return error.TestUnexpectedResult;
     const text = try node.innerTextWithOptions(arena.allocator(), .{ .normalize_whitespace = false });
@@ -1602,7 +1599,7 @@ test "innerText normalization is applied across text-node boundaries" {
     defer arena.deinit();
 
     var html = "<div id='x'>A <b></b>   B</div>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     const node = doc.queryOne("#x") orelse return error.TestUnexpectedResult;
     const text = try node.innerText(arena.allocator());
@@ -1617,7 +1614,7 @@ test "parse-time text normalization is off by default and query-time normalizati
     defer arena.deinit();
 
     var html = "<div id='x'>  alpha  &amp;   beta  </div>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     const node = doc.queryOne("#x") orelse return error.TestUnexpectedResult;
     const text_node = doc.nodes[node.index + 1];
@@ -1637,7 +1634,7 @@ test "parse-time attribute decoding is off by default and query-time lookup deco
     defer doc.deinit();
 
     var html = "<div id='x' data-v='a&amp;b'></div>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     const node = doc.findFirstTag("div") orelse return error.TestUnexpectedResult;
     const attr_start: usize = node.raw().name_or_text.end;
@@ -1656,7 +1653,7 @@ test "isOwned distinguishes borrowed single-text and allocated multi-text innerT
     defer arena.deinit();
 
     var html = "<div id='x'>single</div><div id='y'>a<b></b>b</div>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     const x = doc.queryOne("#x") orelse return error.TestUnexpectedResult;
     const y = doc.queryOne("#y") orelse return error.TestUnexpectedResult;
@@ -1678,7 +1675,7 @@ test "innerTextOwned always returns allocated output and does not mutate source 
     defer arena.deinit();
 
     var html = "<div id='x'>a &amp; b</div>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     const node = doc.queryOne("#x") orelse return error.TestUnexpectedResult;
     const text_node_before = doc.nodes[node.index + 1];
@@ -1699,7 +1696,7 @@ test "inplace attribute parser treats explicit empty assignment as name-only" {
     defer doc.deinit();
 
     var html = "<div id='x' b a=   ></div>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     const node = doc.queryOne("#x") orelse return error.TestUnexpectedResult;
     const a = node.getAttributeValue("a") orelse return error.TestUnexpectedResult;
@@ -1720,7 +1717,7 @@ test "inplace attr lazy parse updates state markers and supports selector-trigge
     defer doc.deinit();
 
     var html = "<div id='x' q='&amp;z' n=a&amp;b></div>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     const by_selector = try doc.queryOneRuntime(alloc, "div[q='&z'][n='a&b']");
     try std.testing.expect(by_selector != null);
@@ -1750,7 +1747,7 @@ test "attribute matching short-circuits and does not parse later attrs on early 
     defer doc.deinit();
 
     var html = "<div id='x' href='/local' class='button'></div>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
@@ -1788,7 +1785,7 @@ test "inplace extended skip metadata preserves traversal for following attribute
     const html = try builder.toOwnedSlice(alloc);
     defer alloc.free(html);
 
-    try doc.parse(html);
+    try resetParsed(.{}, &doc, html);
 
     const node = doc.queryOne("#x") orelse return error.TestUnexpectedResult;
     const a = node.getAttributeValue("a") orelse return error.TestUnexpectedResult;
@@ -1805,7 +1802,7 @@ test "cached selector APIs are equivalent to runtime string wrappers" {
     defer doc.deinit();
 
     var html = selector_fixture_html.*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     const cases = [_]struct { selector: []const u8, expected: []const []const u8 }{
         .{ .selector = "li", .expected = &.{ "li1", "li2", "li3" } },
@@ -1843,18 +1840,18 @@ test "runtime query parsing remains correct across parse and clear" {
     defer doc.deinit();
 
     var html_a = "<div class='x'></div>".*;
-    try doc.parse(&html_a);
+    try resetParsed(.{}, &doc, &html_a);
 
     try std.testing.expect((try doc.queryOneRuntime(alloc, "div.x")) != null);
     try std.testing.expect((try doc.queryOneRuntime(alloc, "div.x")) != null);
 
     var html_b = "<section class='x'></section>".*;
-    try doc.parse(&html_b);
+    try resetParsed(.{}, &doc, &html_b);
     try std.testing.expect((try doc.queryOneRuntime(alloc, "div.x")) == null);
 
     doc.clear();
     var html_c = "<div class='x'></div>".*;
-    try doc.parse(&html_c);
+    try resetParsed(.{}, &doc, &html_c);
     try std.testing.expect((try doc.queryOneRuntime(alloc, "div.x")) != null);
 }
 
@@ -1864,7 +1861,7 @@ test "attr fast-path names are equivalent to generic lookup semantics" {
     defer doc.deinit();
 
     var html = "<a id='x' class='btn primary' href='https://example.com' data-k='v'></a>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     const a = doc.queryOne("a") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("x", a.getAttributeValue("id").?);
@@ -1881,7 +1878,7 @@ test "mixed-case tags and attrs are queryable via lowercase selectors" {
     defer doc.deinit();
 
     var html = "<DiV ID='x' ClAsS='A b' DaTa-K='v'><SpAn id='y'></SpAn></DiV>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     try std.testing.expect(doc.queryOne("div#x[data-k=v]") != null);
     try std.testing.expect((try doc.queryOneRuntime(alloc, "div > span#y")) != null);
@@ -1896,7 +1893,7 @@ test "multiple class predicates in one compound match correctly" {
     defer doc.deinit();
 
     var html = "<div id='x' class='alpha beta gamma'></div><div id='y' class='alpha beta'></div>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     try expectDocQueryComptime(&doc, "div.alpha.beta.gamma", &.{"x"});
     try expectDocQueryRuntime(&doc, "div.alpha.beta.gamma", &.{"x"});
@@ -1909,7 +1906,7 @@ test "class token matching treats all ascii whitespace as separators" {
     defer doc.deinit();
 
     var html = "<div id='t' class='a\tb\nc\rd\x0ce'></div>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     try std.testing.expect(doc.queryOne("#t.a") != null);
     try std.testing.expect(doc.queryOne("#t.b") != null);
@@ -1926,7 +1923,7 @@ test "scoped query with duplicate ids respects scope and extra predicates" {
     defer doc.deinit();
 
     var html = "<div id='outside'><span id='dup' class='x'></span></div><div id='scope'><span id='dup' class='y'></span></div>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     const scope = doc.queryOne("#scope") orelse return error.TestUnexpectedResult;
     const found_ct = scope.queryOne("#dup.y") orelse return error.TestUnexpectedResult;
@@ -1941,7 +1938,7 @@ test "runtime selector rejects multiple ids in one compound" {
     var doc = GetDocument(.{}).init(alloc);
     defer doc.deinit();
     var html = "<div id='a'></div>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     try std.testing.expectError(error.InvalidSelector, doc.queryOneRuntime(alloc, "#a#a"));
 }
@@ -1954,7 +1951,7 @@ test "runtime selector supports nth-child shorthand variants" {
     defer runtime_arena.deinit();
 
     var html = "<div id='pseudos'><div></div><div></div><div></div><div></div><a></a><div></div><div></div></div>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     const comptime_one = doc.queryOne("#pseudos :nth-child(odd)");
     const runtime_one = try doc.queryOneRuntime(alloc, "#pseudos :nth-child(odd)");
@@ -1998,7 +1995,7 @@ test "leading child combinator works in node-scoped queries" {
     defer frag_doc.deinit();
     var frag_html =
         "<root><div class='d i v'><p id='oooo'><em></em><em id='emem'></em></p></div><p id='sep'><div class='a'><span></span></div></p></root>".*;
-    try frag_doc.parse(&frag_html);
+    try resetParsed(.{}, &frag_doc, &frag_html);
     const frag_root = frag_doc.queryOne("root") orelse return error.TestUnexpectedResult;
 
     var it_em = try frag_root.queryAllRuntime(runtime_arena.allocator(), "> div p em");
@@ -2015,7 +2012,7 @@ test "leading child combinator works in node-scoped queries" {
     defer doc_ctx.deinit();
     var doc_html =
         "<root><div id='hsoob'><div class='a b'><div class='d e sib' id='booshTest'><p><span id='spanny'></span></p></div><em class='sib'></em><span class='h i a sib'></span></div><p class='odd'></p></div><div id='lonelyHsoob'></div></root>".*;
-    try doc_ctx.parse(&doc_html);
+    try resetParsed(.{}, &doc_ctx, &doc_html);
     const ctx_root = doc_ctx.queryOne("root") orelse return error.TestUnexpectedResult;
 
     var it_hsoob = try ctx_root.queryAllRuntime(runtime_arena.allocator(), "> #hsoob");
@@ -2041,8 +2038,8 @@ test "parse option bundles preserve selector/query behavior for representative i
         "</body></html>").*;
     var fast_html = strict_html;
 
-    try strict_doc.parse(&strict_html);
-    try fast_doc.parse(&fast_html);
+    try resetParsed(.{ .drop_whitespace_text_nodes = false }, &strict_doc, &strict_html);
+    try resetParsed(.{}, &fast_doc, &fast_html);
 
     const selectors = [_][]const u8{
         "div#x[data-k=v]",
@@ -2069,7 +2066,7 @@ test "children() iterator traverses sibling-chain nodes" {
     defer doc.deinit();
 
     var html = "<div id='root'><span id='a'></span><span id='b'></span></div>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     const root = doc.queryOne("div#root") orelse return error.TestUnexpectedResult;
     var kids = root.children();
@@ -2091,7 +2088,7 @@ test "children() collect respects iterator progress" {
     defer doc.deinit();
 
     var html = "<div id='root'><span id='a'></span><span id='b'></span><span id='c'></span></div>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     const root = doc.queryOne("div#root") orelse return error.TestUnexpectedResult;
     var kids = root.children();
@@ -2111,7 +2108,7 @@ test "unquoted attribute values preserve slash characters" {
     defer doc.deinit();
 
     var html = "<a id=x href=/docs/v1/api data-path=assets/img/logo.svg></a>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     const node = doc.queryOne("a#x") orelse return error.TestUnexpectedResult;
     const href = node.getAttributeValue("href") orelse return error.TestUnexpectedResult;
@@ -2140,10 +2137,10 @@ test "clear resets parsed state and ownership tracking" {
     defer doc.deinit();
 
     var html_a = "<div><a id='x'></a><a id='y'></a></div>".*;
-    try doc.parse(&html_a);
+    try resetParsed(.{}, &doc, &html_a);
 
     var html_b = "<main><p id='z'>owned</p></main>".*;
-    try doc.parse(&html_b);
+    try resetParsed(.{}, &doc, &html_b);
     try std.testing.expect(doc.queryOne("main") != null);
     try std.testing.expect(doc.queryOne("#x") == null);
 
@@ -2181,7 +2178,7 @@ test "runtime attr-heavy selector stress uses in-node parents" {
 
     var doc = GetDocument(.{}).init(alloc);
     defer doc.deinit();
-    try doc.parse(html);
+    try resetParsed(.{}, &doc, html);
 
     const selector = "a[href^=https][class*=button]:not(.missing)";
     var arena = std.heap.ArenaAllocator.init(alloc);
@@ -2216,7 +2213,7 @@ test "bench fixture attr-heavy runtime and cached query smoke" {
 
         var doc = GetDocument(.{}).init(alloc);
         defer doc.deinit();
-        try doc.parse(html);
+        try resetParsed(.{}, &doc, html);
 
         var loops: usize = 0;
         while (loops < 32) : (loops += 1) {
@@ -2233,7 +2230,7 @@ test "bench fixture attr-heavy runtime and cached query smoke" {
 
         var doc = GetDocument(.{}).init(alloc);
         defer doc.deinit();
-        try doc.parse(html);
+        try resetParsed(.{}, &doc, html);
 
         var loops: usize = 0;
         while (loops < 32) : (loops += 1) {
@@ -2251,7 +2248,7 @@ test "queryOneRuntimeDebug reports runtime selector parse errors" {
     defer doc.deinit();
 
     var html = "<div id='x'></div>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     const result = doc.queryOneRuntimeDebug(alloc, "div[");
     try std.testing.expectEqual(@as(?runtime_selector.Error, error.InvalidSelector), result.err);
@@ -2265,7 +2262,7 @@ test "queryOneDebug reports near misses and matched index" {
     defer doc.deinit();
 
     var html = "<div><a id='x' class='k'></a><a id='y'></a></div>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     const miss = doc.queryOneDebug("a[href^=https]");
     try std.testing.expect(miss.err == null);
@@ -2286,7 +2283,7 @@ test "node-scoped runtime debug query reports scope/combinator failures" {
     defer doc.deinit();
 
     var html = "<root><div><span id='inside'></span></div><span id='outside'></span></root>".*;
-    try doc.parse(&html);
+    try resetParsed(.{}, &doc, &html);
 
     const root = doc.queryOne("root") orelse return error.TestUnexpectedResult;
     const found = root.queryOneRuntimeDebug(alloc, "> span#inside");
@@ -2345,12 +2342,11 @@ const HookProbe = struct {
 
 test "instrumentation wrappers invoke compile-time hooks and preserve results" {
     const alloc = std.testing.allocator;
-    var doc = GetDocument(.{}).init(alloc);
-    defer doc.deinit();
     var hooks: HookProbe = .{};
 
     var html = "<div><a id='x' href='https://example'></a></div>".*;
-    try instrumentation.parseWithHooks(std.testing.io, &doc, &html, &hooks);
+    var doc = try instrumentation.parseWithHooks(std.testing.io, ParseOptions{}, alloc, &html, &hooks);
+    defer doc.deinit();
     try std.testing.expectEqual(@as(usize, 1), hooks.parse_start_calls);
     try std.testing.expectEqual(@as(usize, 1), hooks.parse_end_calls);
     try std.testing.expect(hooks.last_parse_stats.elapsed_ns > 0);
@@ -2398,7 +2394,7 @@ test "format document types" {
     var doc = GetDocument(.{}).init(alloc);
     defer doc.deinit();
     var src = "<div><span></span><span></span></div>".*;
-    try doc.parse(&src);
+    try resetParsed(.{}, &doc, &src);
 
     const div = doc.queryOne("div") orelse return error.TestUnexpectedResult;
 

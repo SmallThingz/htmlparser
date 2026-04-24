@@ -16,17 +16,15 @@ fn nowNs(io: std.Io) i96 {
 pub fn runSynthetic(io: std.Io) !void {
     const alloc = std.heap.smp_allocator;
     const options: root.ParseOptions = .{};
-    const Document = options.Document();
-
-    var doc = Document.init(alloc);
-    defer doc.deinit();
-
     var src = "<html><body><ul><li class='x'>1</li><li class='x'>2</li><li>3</li></ul></body></html>".*;
+    var doc = try options.parse(alloc, &src);
+    defer doc.deinit();
 
     const parse_start = nowNs(io);
     var i: usize = 0;
     while (i < 10_000) : (i += 1) {
-        try doc.parse(&src);
+        doc.deinit();
+        doc = try options.parse(alloc, &src);
     }
     const parse_end = nowNs(io);
 
@@ -65,19 +63,15 @@ pub fn runParseFile(io: std.Io, path: []const u8, iterations: usize, mode: Parse
             switch (mode) {
                 .strictest => {
                     const options: root.ParseOptions = .{ .drop_whitespace_text_nodes = false };
-                    const Document = options.Document();
-                    var doc = Document.init(iter_alloc);
-                    defer doc.deinit();
                     const working = working_opt.?;
                     @memcpy(working, input);
-                    try doc.parse(working);
+                    var doc = try options.parse(iter_alloc, working);
+                    defer doc.deinit();
                 },
                 .fastest => {
                     const options: root.ParseOptions = .{};
-                    const Document = options.Document();
-                    var doc = Document.init(iter_alloc);
+                    var doc = try options.parse(iter_alloc, input);
                     defer doc.deinit();
-                    try doc.parse(input);
                 },
             }
         }
@@ -119,10 +113,8 @@ pub fn runQueryMatch(io: std.Io, path: []const u8, selector: []const u8, iterati
     return switch (mode) {
         .strictest => blk: {
             const options: root.ParseOptions = .{ .drop_whitespace_text_nodes = false };
-            const Document = options.Document();
-            var doc = Document.init(alloc);
+            var doc = try options.parse(alloc, working);
             defer doc.deinit();
-            try doc.parse(working);
 
             const start = nowNs(io);
             var i: usize = 0;
@@ -133,10 +125,8 @@ pub fn runQueryMatch(io: std.Io, path: []const u8, selector: []const u8, iterati
         },
         .fastest => blk: {
             const options: root.ParseOptions = .{};
-            const Document = options.Document();
-            var doc = Document.init(alloc);
+            var doc = try options.parse(alloc, working);
             defer doc.deinit();
-            try doc.parse(working);
 
             const start = nowNs(io);
             var i: usize = 0;
@@ -166,10 +156,8 @@ pub fn runQueryCached(io: std.Io, path: []const u8, selector: []const u8, iterat
     return switch (mode) {
         .strictest => blk: {
             const options: root.ParseOptions = .{ .drop_whitespace_text_nodes = false };
-            const Document = options.Document();
-            var doc = Document.init(alloc);
+            var doc = try options.parse(alloc, working);
             defer doc.deinit();
-            try doc.parse(working);
 
             const start = nowNs(io);
             var i: usize = 0;
@@ -180,10 +168,8 @@ pub fn runQueryCached(io: std.Io, path: []const u8, selector: []const u8, iterat
         },
         .fastest => blk: {
             const options: root.ParseOptions = .{};
-            const Document = options.Document();
-            var doc = Document.init(alloc);
+            var doc = try options.parse(alloc, working);
             defer doc.deinit();
-            try doc.parse(working);
 
             const start = nowNs(io);
             var i: usize = 0;
@@ -266,19 +252,15 @@ pub fn main(init: std.process.Init) !void {
 test "bench smoke uses parse_mode module for both parse modes" {
     const alloc = std.testing.allocator;
     const fastest_options: root.ParseOptions = .{};
-    const FastestDocument = fastest_options.Document();
     const strictest_options: root.ParseOptions = .{ .drop_whitespace_text_nodes = false };
-    const StrictestDocument = strictest_options.Document();
 
-    var fastest_doc = FastestDocument.init(alloc);
-    defer fastest_doc.deinit();
     var fastest_html = "<div><span id='x'>ok</span></div>".*;
-    try fastest_doc.parse(&fastest_html);
+    var fastest_doc = try fastest_options.parse(alloc, &fastest_html);
+    defer fastest_doc.deinit();
     try std.testing.expect(fastest_doc.queryOne("span#x") != null);
 
-    var strict_doc = StrictestDocument.init(alloc);
-    defer strict_doc.deinit();
     var strict_html = "<div>\n  <span id='y'>ok</span>\n</div>".*;
-    try strict_doc.parse(&strict_html);
+    var strict_doc = try strictest_options.parse(alloc, &strict_html);
+    defer strict_doc.deinit();
     try std.testing.expect(strict_doc.queryOne("span#y") != null);
 }

@@ -25,8 +25,6 @@ pub const QueryInstrumentationStats = instrumentation.QueryInstrumentationStats;
 /// Kind of query operation measured by instrumentation wrappers.
 pub const QueryInstrumentationKind = instrumentation.QueryInstrumentationKind;
 
-/// Parses a document and invokes optional start/end hook callbacks.
-pub const parseWithHooks = instrumentation.parseWithHooks;
 /// Executes `queryOneRuntime` and reports timing through hook callbacks.
 pub const queryOneRuntimeWithHooks = instrumentation.queryOneRuntimeWithHooks;
 /// Executes `queryOneCached` and reports timing through hook callbacks.
@@ -36,22 +34,12 @@ pub const queryAllRuntimeWithHooks = instrumentation.queryAllRuntimeWithHooks;
 /// Executes `queryAllCached` and reports timing through hook callbacks.
 pub const queryAllCachedWithHooks = instrumentation.queryAllCachedWithHooks;
 
-/// Parses `input` into a freshly initialized document and returns it.
-/// The returned document borrows `input`, so `input` must outlive the document.
-pub fn parse(comptime options: ParseOptions, allocator: std.mem.Allocator, input: options.Input()) !options.Document() {
-    return options.parse(allocator, input);
-}
-
 test "smoke parse/query" {
     const alloc = std.testing.allocator;
     const opts: ParseOptions = .{};
-    const Document = opts.Document();
-
-    var doc = Document.init(alloc);
-    defer doc.deinit();
-
     var src = "<div id='a'><span class='k'>v</span></div>".*;
-    try doc.parse(&src);
+    var doc = try opts.parse(alloc, &src);
+    defer doc.deinit();
 
     try std.testing.expect(doc.queryOne("div#a") != null);
     try std.testing.expect((try doc.queryOneRuntime(alloc, "span")) != null);
@@ -59,32 +47,6 @@ test "smoke parse/query" {
     const parent = span.parentNode() orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("div", parent.tagName());
     try std.testing.expect(doc.queryOne("div > span.k") != null);
-}
-
-test "top-level parse helper (destructive)" {
-    const alloc = std.testing.allocator;
-    const opts: ParseOptions = .{};
-
-    var src = "<div id='a'><span>v</span></div>".*;
-    var doc = try parse(opts, alloc, &src);
-    defer doc.deinit();
-
-    try std.testing.expect(doc.queryOne("div#a > span") != null);
-}
-
-test "top-level parse helper (non-destructive)" {
-    const alloc = std.testing.allocator;
-    const opts: ParseOptions = .{ .non_destructive = true };
-
-    const src = "<div id='a' data-v='x&amp;y'>x</div>";
-    var doc = try parse(opts, alloc, src);
-    defer doc.deinit();
-    var arena = std.heap.ArenaAllocator.init(alloc);
-    defer arena.deinit();
-
-    const div = doc.queryOne("div#a") orelse return error.TestUnexpectedResult;
-    const v = div.getAttributeValueAlloc(arena.allocator(), "data-v") orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("x&y", v);
 }
 
 test "parse options helper parses directly" {
@@ -115,13 +77,9 @@ test "parse options helper parses directly" {
 test "writeHtml serializes node subtree" {
     const alloc = std.testing.allocator;
     const opts: ParseOptions = .{};
-    const Document = opts.Document();
-
-    var doc = Document.init(alloc);
-    defer doc.deinit();
-
     var src = "<div id='a'><span>v</span></div>".*;
-    try doc.parse(&src);
+    var doc = try opts.parse(alloc, &src);
+    defer doc.deinit();
 
     const div = doc.queryOne("div") orelse return error.TestUnexpectedResult;
 
@@ -134,13 +92,9 @@ test "writeHtml serializes node subtree" {
 test "writeHtml respects in-place attr parsing and void tags" {
     const alloc = std.testing.allocator;
     const opts: ParseOptions = .{};
-    const Document = opts.Document();
-
-    var doc = Document.init(alloc);
-    defer doc.deinit();
-
     var src = "<img id='i' class='x' data-q='1>2'/>".*;
-    try doc.parse(&src);
+    var doc = try opts.parse(alloc, &src);
+    defer doc.deinit();
 
     const img = doc.queryOne("img#i") orelse return error.TestUnexpectedResult;
     _ = img.getAttributeValue("class") orelse return error.TestUnexpectedResult;
@@ -155,13 +109,9 @@ test "writeHtml respects in-place attr parsing and void tags" {
 test "writeHtml reflects in-place text decoding" {
     const alloc = std.testing.allocator;
     const opts: ParseOptions = .{};
-    const Document = opts.Document();
-
-    var doc = Document.init(alloc);
-    defer doc.deinit();
-
     var src = "<p>&amp; &lt;</p>".*;
-    try doc.parse(&src);
+    var doc = try opts.parse(alloc, &src);
+    defer doc.deinit();
 
     const p = doc.queryOne("p") orelse return error.TestUnexpectedResult;
     _ = try p.innerText(alloc);
@@ -175,13 +125,9 @@ test "writeHtml reflects in-place text decoding" {
 test "writeHtml drops whitespace-only text nodes when configured" {
     const alloc = std.testing.allocator;
     const opts: ParseOptions = .{};
-    const Document = opts.Document();
-
-    var doc = Document.init(alloc);
-    defer doc.deinit();
-
     var src = "<div> a <span> b </span> c </div>".*;
-    try doc.parse(&src);
+    var doc = try opts.parse(alloc, &src);
+    defer doc.deinit();
 
     const div = doc.queryOne("div") orelse return error.TestUnexpectedResult;
 
@@ -194,11 +140,6 @@ test "writeHtml drops whitespace-only text nodes when configured" {
 test "writeHtml parses and prints complex document" {
     const alloc = std.testing.allocator;
     const opts: ParseOptions = .{ .drop_whitespace_text_nodes = false };
-    const Document = opts.Document();
-
-    var doc = Document.init(alloc);
-    defer doc.deinit();
-
     const src_const =
         \\<!DOCTYPE html>
         \\<html><head>
@@ -214,7 +155,8 @@ test "writeHtml parses and prints complex document" {
     ;
     const src = try alloc.dupe(u8, src_const);
     defer alloc.free(src);
-    try doc.parse(src);
+    var doc = try opts.parse(alloc, src);
+    defer doc.deinit();
 
     const html = doc.html() orelse return error.TestUnexpectedResult;
 
@@ -247,13 +189,9 @@ test "writeHtml parses and prints complex document" {
 test "writeHtmlSelf excludes children" {
     const alloc = std.testing.allocator;
     const opts: ParseOptions = .{};
-    const Document = opts.Document();
-
-    var doc = Document.init(alloc);
-    defer doc.deinit();
-
     var src = "<div id='a'><span>v</span></div>".*;
-    try doc.parse(&src);
+    var doc = try opts.parse(alloc, &src);
+    defer doc.deinit();
 
     const div = doc.queryOne("div") orelse return error.TestUnexpectedResult;
 

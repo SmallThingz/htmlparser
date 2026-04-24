@@ -47,18 +47,14 @@ fn parseFixtureDoc(io: std.Io, alloc: std.mem.Allocator, mode: ParseMode, fixtur
     return switch (mode) {
         .strictest => blk: {
             const options: html.ParseOptions = .{ .drop_whitespace_text_nodes = false };
-            const Document = options.Document();
-            var doc = Document.init(alloc);
+            var doc = try options.parse(alloc, working);
             errdefer doc.deinit();
-            try doc.parse(working);
             break :blk .{ .strictest = .{ .doc = doc, .working = working } };
         },
         .fastest => blk: {
             const options: html.ParseOptions = .{};
-            const Document = options.Document();
-            var doc = Document.init(alloc);
+            var doc = try options.parse(alloc, working);
             errdefer doc.deinit();
-            try doc.parse(working);
             break :blk .{ .fastest = .{ .doc = doc, .working = working } };
         },
     };

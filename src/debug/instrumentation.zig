@@ -13,11 +13,11 @@ pub const QueryInstrumentationKind = enum(u8) {
     }
 };
 
-/// Timing/count payload emitted after `parseWithHooks`.
+/// Timing/count payload emitted after parse instrumentation.
 pub const ParseInstrumentationStats = struct {
     /// End-to-end parse duration in nanoseconds.
     elapsed_ns: u64,
-    /// Input byte length passed to `parseWithHooks`.
+    /// Input byte length passed to the instrumented parse.
     input_len: usize,
     /// Total node count produced by the parse.
     node_count: usize,
@@ -74,14 +74,14 @@ fn matchedFromValue(value: anytype) ?bool {
     };
 }
 
-/// Parses `input` and invokes optional parse hooks when provided.
-pub fn parseWithHooks(io: std.Io, doc: anytype, input: anytype, hooks: anytype) !void {
+/// Parses `input` through `options.parse` and invokes optional parse hooks when provided.
+pub fn parseWithHooks(io: std.Io, comptime options: anytype, allocator: std.mem.Allocator, input: anytype, hooks: anytype) @TypeOf(options.parse(allocator, input)) {
     if (comptime @hasDecl(HookDeclType(@TypeOf(hooks)), "onParseStart")) {
         hooks.onParseStart(input.len);
     }
 
     const start = std.Io.Timestamp.now(io, .awake);
-    try doc.parse(input);
+    const doc = try options.parse(allocator, input);
     const stats: ParseInstrumentationStats = .{
         .elapsed_ns = elapsedNs(start, std.Io.Timestamp.now(io, .awake)),
         .input_len = input.len,
@@ -91,6 +91,7 @@ pub fn parseWithHooks(io: std.Io, doc: anytype, input: anytype, hooks: anytype) 
     if (comptime @hasDecl(HookDeclType(@TypeOf(hooks)), "onParseEnd")) {
         hooks.onParseEnd(stats);
     }
+    return doc;
 }
 
 /// Executes `queryOneRuntime` and emits query timing hooks.

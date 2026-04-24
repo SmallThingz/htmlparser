@@ -54,7 +54,6 @@ fn ParseState(comptime opts: ParseOptions) type {
         parse_stack: std.ArrayListUnmanaged(OpenElem) = .empty,
 
         const Self = @This();
-        const Doc = opts.Document();
         const OpenElem = struct {
             /// First-8-bytes lowercase key for the open tag name.
             tag_key: u64 = 0,
@@ -68,7 +67,7 @@ fn ParseState(comptime opts: ParseOptions) type {
             defer self.parse_stack.deinit(self.doc.allocator);
             try self.reserveCapacities();
 
-            _ = try self.pushNode(.{
+            try self.pushNode(.{
                 .subtree_end = 0,
             });
             try self.pushStack(0, 0, 0);
@@ -417,7 +416,7 @@ fn ParseState(comptime opts: ParseOptions) type {
                 .parent = parent_idx,
                 .subtree_end = idx,
             };
-            _ = try self.pushNode(node);
+            try self.pushNode(node);
             return idx;
         }
 
@@ -428,7 +427,7 @@ fn ParseState(comptime opts: ParseOptions) type {
                 .subtree_end = idx,
             };
 
-            _ = try self.pushNode(node);
+            try self.pushNode(node);
 
             if (parent_idx != InvalidIndex) {
                 var p = &self.nodes.items[parent_idx];
@@ -444,10 +443,8 @@ fn ParseState(comptime opts: ParseOptions) type {
             return idx;
         }
 
-        fn pushNode(noalias self: *Self, node: @TypeOf(self.nodes.items[0])) !IndexInt {
-            const len = self.nodes.items.len;
+        fn pushNode(noalias self: *Self, node: @TypeOf(self.nodes.items[0])) !void {
             try self.nodes.append(self.doc.allocator, node);
-            return @intCast(len);
         }
 
         fn pushStack(noalias self: *Self, idx: IndexInt, tag_key: u64, tag_len: u16) !void {
@@ -588,6 +585,11 @@ const NonDestructiveTestOptions: ParseOptions = .{ .non_destructive = true };
 const TestDocument = DefaultTestOptions.Document();
 const StrictTestDocument = StrictTestOptions.Document();
 const NonDestructiveTestDocument = NonDestructiveTestOptions.Document();
+
+fn resetParsed(comptime options: ParseOptions, doc: *options.Document(), input: options.Input()) !void {
+    doc.deinit();
+    doc.* = try options.parse(doc.allocator, input);
+}
 
 fn expectDocumentStructureValid(doc: anytype) !void {
     const testing = std.testing;
@@ -771,11 +773,11 @@ fn runParserPropertyCase(alloc: std.mem.Allocator, input: []const u8) !void {
 
     var destructive_doc = TestDocument.init(alloc);
     defer destructive_doc.deinit();
-    try destructive_doc.parse(destructive_input);
+    try resetParsed(DefaultTestOptions, &destructive_doc, destructive_input);
 
     var nondestructive_doc = NonDestructiveTestDocument.init(alloc);
     defer nondestructive_doc.deinit();
-    try nondestructive_doc.parse(nondestructive_input);
+    try resetParsed(NonDestructiveTestOptions, &nondestructive_doc, nondestructive_input);
 
     try expectDocumentStructureValid(&destructive_doc);
     try expectDocumentStructureValid(&nondestructive_doc);
@@ -812,7 +814,7 @@ test "tag-name state keeps < inside malformed start tag name" {
     defer doc.deinit();
 
     var src = "<div<div>".*;
-    try doc.parse(&src);
+    try resetParsed(DefaultTestOptions, &doc, &src);
 
     const first = doc.nodeAt(1) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("div<div", first.tagName());
@@ -836,7 +838,7 @@ test "u16 parse rejects oversized input" {
     src[1] = 'p';
     src[2] = '>';
 
-    try std.testing.expectError(error.InputTooLarge, doc.parse(src));
+    try std.testing.expectError(error.InputTooLarge, DefaultTestOptions.parse(alloc, src));
 }
 
 test "u64 parse accepts sparse 8 GiB plaintext input" {
@@ -875,7 +877,7 @@ test "u64 parse accepts sparse 8 GiB plaintext input" {
 
     var doc = TestDocument.init(alloc);
     defer doc.deinit();
-    try doc.parse(mapped.memory);
+    try resetParsed(NonDestructiveTestOptions, &doc, mapped.memory);
 
     try std.testing.expectEqual(@as(usize, 3), doc.nodes.len);
     const plaintext = doc.nodeAt(1) orelse return error.TestUnexpectedResult;
@@ -925,7 +927,7 @@ test "non-destructive parse supports file-backed memory maps without changing by
 
     var doc = NonDestructiveTestDocument.init(alloc);
     defer doc.deinit();
-    try doc.parse(mapped.memory);
+    try resetParsed(NonDestructiveTestOptions, &doc, mapped.memory);
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
 
@@ -945,7 +947,7 @@ test "raw text element metadata remains valid after child append growth" {
     defer doc.deinit();
 
     var html = "<script>const x = 1;</script><div>ok</div>".*;
-    try doc.parse(&html);
+    try resetParsed(DefaultTestOptions, &doc, &html);
 
     const script = doc.queryOne("script") orelse return error.TestUnexpectedResult;
     try std.testing.expect(script.raw().subtree_end > script.index);
@@ -964,7 +966,7 @@ test "raw-text close handles mixed-case end tag and embedded < bytes" {
     defer doc.deinit();
 
     var html = "<script>if (a < b) { x = \"<tag>\"; }</ScRiPt   ><div id='after'></div>".*;
-    try doc.parse(&html);
+    try resetParsed(DefaultTestOptions, &doc, &html);
 
     const script = doc.queryOne("script") orelse return error.TestUnexpectedResult;
     const after = doc.queryOne("div#after") orelse return error.TestUnexpectedResult;
@@ -977,7 +979,7 @@ test "raw-text unterminated tail keeps element open to end of input" {
     defer doc.deinit();
 
     var html = "<script>const a = 1; <div>still script".*;
-    try doc.parse(&html);
+    try resetParsed(DefaultTestOptions, &doc, &html);
 
     const script = doc.queryOne("script") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(IndexInt, @intCast(doc.nodes.len - 1)), script.raw().subtree_end);
@@ -990,7 +992,7 @@ test "svg subtrees are skipped and stored as one text child payload" {
     defer doc.deinit();
 
     var html = "<div id='before'></div><svg id='s'><g><svg id='inner'><rect id='r'/></svg><circle id='c'/></g></svg><div id='after'></div>".*;
-    try doc.parse(&html);
+    try resetParsed(DefaultTestOptions, &doc, &html);
 
     const first_svg = doc.queryOne("svg") orelse return error.TestUnexpectedResult;
     const svg_text = try first_svg.innerTextWithOptions(alloc, .{ .normalize_whitespace = false });
@@ -1013,7 +1015,7 @@ test "svg skip scanner ignores <svg in quoted attributes" {
     defer doc.deinit();
 
     var html = "<div id='x' data-k=\"prefix <svg attr='x'> suffix\"></div><p id='after'></p>".*;
-    try doc.parse(&html);
+    try resetParsed(DefaultTestOptions, &doc, &html);
 
     const x = doc.queryOne("#x") orelse return error.TestUnexpectedResult;
     const v = x.getAttributeValue("data-k") orelse return error.TestUnexpectedResult;
@@ -1027,7 +1029,7 @@ test "self-closing svg is stored as regular element with no text child" {
     defer doc.deinit();
 
     var html = "<div id='before'></div><svg id='s' viewBox='0 0 1 1' /><div id='after'></div>".*;
-    try doc.parse(&html);
+    try resetParsed(DefaultTestOptions, &doc, &html);
 
     const first_svg = doc.queryOne("svg") orelse return error.TestUnexpectedResult;
     const svg_text = try first_svg.innerTextWithOptions(alloc, .{ .normalize_whitespace = false });
@@ -1049,7 +1051,7 @@ test "optional-close p/li/td-th/dt-dd/head-body preserve expected query semantic
         "<dl><dt id='dt1'>a<dd id='dd1'>b<dt id='dt2'>c</dl>" ++
         "<table><tr><td id='td1'>1<th id='th1'>2<td id='td2'>3</tr></table>" ++
         "</body></html>").*;
-    try doc.parse(&html);
+    try resetParsed(DefaultTestOptions, &doc, &html);
 
     try std.testing.expect(doc.queryOne("#p1 + #d1") != null);
     try std.testing.expect(doc.queryOne("#li1 + #li2") != null);
@@ -1066,7 +1068,7 @@ test "mismatched close with identical first8 prefix does not close long tag" {
     defer doc.deinit();
 
     var html = "<abcdefgh1 id='outer'><span id='inner'></span></abcdefgh2><p id='after'></p>".*;
-    try doc.parse(&html);
+    try resetParsed(DefaultTestOptions, &doc, &html);
 
     const outer = doc.queryOne("abcdefgh1#outer") orelse return error.TestUnexpectedResult;
     const after = doc.queryOne("p#after") orelse return error.TestUnexpectedResult;
@@ -1079,7 +1081,7 @@ test "processing-instruction-like nodes end at the next >" {
     defer doc.deinit();
 
     var html = "<?xml version='1.0'><div id='x'></div><p id='y'></p>".*;
-    try doc.parse(&html);
+    try resetParsed(DefaultTestOptions, &doc, &html);
 
     const x = doc.queryOne("div#x") orelse return error.TestUnexpectedResult;
     const y = doc.queryOne("p#y") orelse return error.TestUnexpectedResult;
@@ -1093,7 +1095,7 @@ test "bang nodes respect quoted > when skipping doctype-like declarations" {
     defer doc.deinit();
 
     var html = "<!DOCTYPE html SYSTEM \"a>b\"><div id='x'></div><p id='y'></p>".*;
-    try doc.parse(&html);
+    try resetParsed(DefaultTestOptions, &doc, &html);
 
     const x = doc.queryOne("div#x") orelse return error.TestUnexpectedResult;
     const y = doc.queryOne("p#y") orelse return error.TestUnexpectedResult;
@@ -1112,8 +1114,8 @@ test "whitespace-only text nodes drop only in fastest mode" {
     var strict_html = "<div id='x'> \n\t </div><div id='y'> hi </div>".*;
     var fast_html = strict_html;
 
-    try strict_doc.parse(&strict_html);
-    try fast_doc.parse(&fast_html);
+    try resetParsed(StrictTestOptions, &strict_doc, &strict_html);
+    try resetParsed(DefaultTestOptions, &fast_doc, &fast_html);
 
     try std.testing.expectEqual(@as(usize, 5), strict_doc.nodes.len);
     try std.testing.expectEqual(@as(usize, 4), fast_doc.nodes.len);
@@ -1129,7 +1131,7 @@ test "fastest mode drops indentation-only runs between child elements" {
     defer doc.deinit();
 
     var html = "<div>\n  <a></a>\n  <b></b>\n</div>".*;
-    try doc.parse(&html);
+    try resetParsed(DefaultTestOptions, &doc, &html);
 
     try std.testing.expectEqual(@as(usize, 4), doc.nodes.len);
 
@@ -1148,7 +1150,7 @@ test "attribute scanner handles quoted > and self-closing tails" {
     defer doc.deinit();
 
     var html = "<div id='a' data-q='x>y' data-n=abc></div><img id='i' src='x' /><br id='b'>".*;
-    try doc.parse(&html);
+    try resetParsed(DefaultTestOptions, &doc, &html);
 
     try std.testing.expect(doc.queryOne("div#a[data-q='x>y']") != null);
     try std.testing.expect(doc.queryOne("img#i[src='x']") != null);
@@ -1161,7 +1163,7 @@ test "attribute parsing still builds the DOM" {
     defer doc.deinit();
 
     var html = "<div id='x'><span id='y'></span></div>".*;
-    try doc.parse(&html);
+    try resetParsed(DefaultTestOptions, &doc, &html);
 
     try std.testing.expect(doc.nodes.len > 1);
     try std.testing.expect(doc.queryOne("#x") != null);

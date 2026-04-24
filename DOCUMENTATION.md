@@ -153,7 +153,6 @@ Use cases:
 
 ### Instrumentation wrappers
 
-- `parseWithHooks(doc, input, hooks)`
 - `queryOneRuntimeWithHooks(doc, selector, hooks)`
 - `queryOneCachedWithHooks(doc, selector, hooks)`
 - `queryAllRuntimeWithHooks(doc, selector, hooks)`
