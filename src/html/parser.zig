@@ -78,7 +78,7 @@ fn ParseState(comptime opts: ParseOptions) type {
 
             // Main tokenization loop. Text spans and tags are dispatched here,
             // while specialized helpers handle the actual node construction.
-            while (self.i < self.input.len) {
+            while (self.i + 1 < self.input.len) {
                 if (self.input[self.i] != '<') {
                     if (comptime opts.drop_whitespace_text_nodes) {
                         comptime std.debug.assert(opts.drop_whitespace_text_nodes);
@@ -87,12 +87,6 @@ fn ParseState(comptime opts: ParseOptions) type {
                         comptime std.debug.assert(!opts.drop_whitespace_text_nodes);
                         try self.parseTextKeepWhitespace();
                     }
-                    continue;
-                }
-
-                if (self.i + 1 >= self.input.len) {
-                    @branchHint(.cold);
-                    self.i += 1;
                     continue;
                 }
 
@@ -108,6 +102,14 @@ fn ParseState(comptime opts: ParseOptions) type {
                         }
                     },
                     else => try self.parseOpeningTag(),
+                }
+            }
+            if (self.i < self.input.len) {
+                std.debug.assert(self.i + 1 == self.input.len);
+                if (!(comptime opts.drop_whitespace_text_nodes) or !tables.WhitespaceTable[self.input[self.i]]) {
+                    const start = self.i;
+                    self.i += 1;
+                    _ = try self.appendTextNode(start, self.i);
                 }
             }
 
