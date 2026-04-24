@@ -7,14 +7,7 @@
     .paths = .{
         "build.zig",
         "build.zig.zon",
-        "README.md",
-        "DOCUMENTATION.md",
         "LICENSE",
-        "CONTRIBUTING.md",
-        "SECURITY.md",
-        "CHANGELOG.md",
-        "examples",
         "src",
-        "bench",
     },
 }
