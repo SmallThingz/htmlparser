@@ -170,7 +170,7 @@ pub fn parentElement(doc: anytype, node_index: IndexInt) ?IndexInt {
 pub fn prevElementSibling(doc: anytype, node_index: IndexInt) ?IndexInt {
     var prev = doc.nodes[node_index].prev_sibling;
     while (prev != InvalidIndex) : (prev = doc.nodes[prev].prev_sibling) {
-        if (doc.isElementIndex(prev)) return prev;
+        if (doc.nodes[prev].isElement(prev)) return prev;
     }
     return null;
 }

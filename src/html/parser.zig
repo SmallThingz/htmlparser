@@ -4,6 +4,7 @@ const tags = @import("tags.zig");
 const scanner = @import("scanner.zig");
 const common = @import("../common.zig");
 const ParseOptions = @import("document.zig").ParseOptions;
+const RawNode = @import("document.zig").RawNode;
 
 const InvalidIndex: IndexInt = common.InvalidIndex;
 const IndexInt = common.IndexInt;
@@ -24,7 +25,7 @@ pub fn parse(comptime opts: ParseOptions, allocator: std.mem.Allocator, input: o
     errdefer doc.deinit();
     doc.source = input;
 
-    var node_buf: std.ArrayListUnmanaged(opts.GetNodeRaw()) = .empty;
+    var node_buf: std.ArrayListUnmanaged(RawNode) = .empty;
     errdefer node_buf.deinit(allocator);
 
     var state = ParseState(opts){
@@ -48,7 +49,7 @@ fn ParseState(comptime opts: ParseOptions) type {
         /// Current byte cursor inside `input`.
         i: usize,
         /// Growable node buffer owned by parser during tree construction.
-        nodes: *std.ArrayListUnmanaged(opts.GetNodeRaw()),
+        nodes: *std.ArrayListUnmanaged(RawNode),
         /// Open-element stack used only while building the tree.
         parse_stack: std.ArrayListUnmanaged(OpenElem) = .empty,
 
@@ -694,7 +695,7 @@ fn exerciseRuntimeApis(doc: anytype, alloc: std.mem.Allocator) !void {
         const node = doc.nodeAt(@intCast(idx)) orelse continue;
         var arena = std.heap.ArenaAllocator.init(alloc);
         defer arena.deinit();
-        if (doc.isElementIndex(@intCast(idx))) {
+        if (doc.nodes[idx].isElement(@intCast(idx))) {
             if (comptime @FieldType(@TypeOf(doc.*), "source") == []const u8) {
                 _ = node.getAttributeValueAlloc(arena.allocator(), "id");
                 _ = node.getAttributeValueAlloc(arena.allocator(), "class");

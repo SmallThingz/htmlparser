@@ -303,14 +303,14 @@ fn firstMatchForGroup(comptime Doc: type, doc: *const Doc, selector: ast.Selecto
     const bounds = traversalBounds(Doc, doc, scope_root);
     var i = bounds.start;
     while (i < bounds.end_excl and i < doc.nodes.len) : (i += 1) {
-        if (!doc.isElementIndex(i)) continue;
+        if (!doc.nodes[i].isElement(i)) continue;
         if (matchGroupFromRight(Doc, doc, selector, group, rightmost, i, scope_root)) return i;
     }
     return null;
 }
 
 fn matchesCompound(comptime Doc: type, noalias doc: *const Doc, selector: ast.Selector, comp: ast.Compound, node_index: IndexInt) bool {
-    if (!doc.isElementIndex(node_index)) return false;
+    if (!doc.nodes[node_index].isElement(node_index)) return false;
     const node = &doc.nodes[node_index];
     var scratch = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer scratch.deinit();

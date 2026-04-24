@@ -21,6 +21,42 @@ const IndexInt = common.IndexInt;
 /// Sentinel used for missing node indexes and invalid spans.
 pub const InvalidIndex: IndexInt = common.InvalidIndex;
 
+/// Backing node storage record for parsed DOM state.
+pub const RawNode = struct {
+    /// Tag-name span for elements or text span for text nodes.
+    name_or_text: Span = .{},
+
+    /// End of the raw attribute byte span for element nodes.
+    /// Attribute bytes begin at `name_or_text.end`.
+    /// `0` marks non-element nodes (document root at index 0, or text).
+    attr_end: IndexInt = 0,
+
+    /// Last direct child index. The first child is derived from `index + 1`.
+    last_child: IndexInt = InvalidIndex,
+    /// Previous sibling index. The next sibling is derived from `subtree_end + 1`.
+    prev_sibling: IndexInt = InvalidIndex,
+    /// Parent node index.
+    parent: IndexInt = InvalidIndex,
+
+    /// Inclusive subtree tail index for fast descendant skipping.
+    subtree_end: IndexInt = 0,
+
+    /// Returns whether `idx` designates the synthetic document root.
+    pub inline fn isDocument(_: @This(), idx: IndexInt) bool {
+        return idx == 0;
+    }
+
+    /// Returns whether this node is a text node.
+    pub inline fn isText(self: @This(), idx: IndexInt) bool {
+        return idx != 0 and self.attr_end == 0;
+    }
+
+    /// Returns whether this node is an element node.
+    pub inline fn isElement(self: @This(), idx: IndexInt) bool {
+        return idx != 0 and self.attr_end != 0;
+    }
+};
+
 /// Compile-time parser options and type factory for generated public API types.
 pub const ParseOptions = struct {
     /// Drops whitespace-only text nodes during parse when throughput matters more
@@ -47,30 +83,6 @@ pub const ParseOptions = struct {
             self.drop_whitespace_text_nodes,
             self.non_destructive,
         });
-    }
-
-    /// Returns the raw node storage layout used by `Document.nodes`.
-    pub fn GetNodeRaw(_: @This()) type {
-        return struct {
-            //! Backing node storage record for parsed DOM state.
-            /// Tag-name span for elements or text span for text nodes.
-            name_or_text: Span = .{},
-
-            /// End of the raw attribute byte span for element nodes.
-            /// Attribute bytes begin at `name_or_text.end`.
-            /// `0` marks non-element nodes (document root at index 0, or text).
-            attr_end: IndexInt = 0,
-
-            /// Last direct child index. The first child is derived from `index + 1`.
-            last_child: IndexInt = InvalidIndex,
-            /// Previous sibling index. The next sibling is derived from `subtree_end + 1`.
-            prev_sibling: IndexInt = InvalidIndex,
-            /// Parent node index.
-            parent: IndexInt = InvalidIndex,
-
-            /// Inclusive subtree tail index for fast descendant skipping.
-            subtree_end: IndexInt = 0,
-        };
     }
 
     /// Returns the lightweight node wrapper type bound to this option set.
@@ -100,7 +112,7 @@ pub const ParseOptions = struct {
             index: IndexInt,
 
             /// Returns the underlying raw node record.
-            pub fn raw(self: @This()) *const options.GetNodeRaw() {
+            pub fn raw(self: @This()) *const RawNode {
                 return &self.doc.nodes[self.index];
             }
 
@@ -137,7 +149,7 @@ pub const ParseOptions = struct {
                 const node_raw = &doc.nodes[self.index];
 
                 if (comptime options.non_destructive) {
-                    if (doc.isTextIndex(self.index)) {
+                    if (node_raw.isText(self.index)) {
                         const text = node_raw.name_or_text.slice(doc.source);
                         if (!opts.normalize_whitespace and std.mem.indexOfScalar(u8, text, '&') == null) return text;
                         return self.innerTextOwnedWithOptions(arena_alloc, opts);
@@ -148,7 +160,7 @@ pub const ParseOptions = struct {
                     var idx = self.index + 1;
                     while (idx <= node_raw.subtree_end and idx < doc.nodes.len) : (idx += 1) {
                         const node = &doc.nodes[idx];
-                        if (!doc.isTextIndex(idx)) continue;
+                        if (!node.isText(idx)) continue;
                         text_count += 1;
                         if (text_count == 1) first_text = node.name_or_text.slice(doc.source);
                         if (text_count > 1) break;
@@ -160,7 +172,7 @@ pub const ParseOptions = struct {
                     }
                     return self.innerTextOwnedWithOptions(arena_alloc, opts);
                 } else {
-                    if (doc.isTextIndex(self.index)) {
+                    if (node_raw.isText(self.index)) {
                         const mut_node = &doc.nodes[self.index];
                         _ = decodeTextNode(mut_node, doc);
                         if (!opts.normalize_whitespace) return mut_node.name_or_text.slice(doc.source);
@@ -173,7 +185,7 @@ pub const ParseOptions = struct {
                     var idx = self.index + 1;
                     while (idx <= node_raw.subtree_end and idx < doc.nodes.len) : (idx += 1) {
                         const node = &doc.nodes[idx];
-                        if (!doc.isTextIndex(idx)) continue;
+                        if (!node.isText(idx)) continue;
                         count += 1;
                         _ = decodeTextNode(node, doc);
                         if (count == 1) first_idx = idx;
@@ -193,7 +205,7 @@ pub const ParseOptions = struct {
                         idx = self.index + 1;
                         while (idx <= node_raw.subtree_end and idx < doc.nodes.len) : (idx += 1) {
                             const node = &doc.nodes[idx];
-                            if (!doc.isTextIndex(idx)) continue;
+                            if (!node.isText(idx)) continue;
                             const seg = node.name_or_text.slice(doc.source);
                             try ensureOutExtra(&out, arena_alloc, seg.len);
                             out.appendSliceAssumeCapacity(seg);
@@ -203,7 +215,7 @@ pub const ParseOptions = struct {
                         idx = self.index + 1;
                         while (idx <= node_raw.subtree_end and idx < doc.nodes.len) : (idx += 1) {
                             const node = &doc.nodes[idx];
-                            if (!doc.isTextIndex(idx)) continue;
+                            if (!node.isText(idx)) continue;
                             try appendNormalizedSegment(&out, arena_alloc, node.name_or_text.slice(doc.source), &state);
                         }
                     }
@@ -226,7 +238,7 @@ pub const ParseOptions = struct {
                 var out = std.ArrayList(u8).empty;
                 defer out.deinit(arena_alloc);
 
-                if (doc.isTextIndex(self.index)) {
+                if (node_raw.isText(self.index)) {
                     const text = node_raw.name_or_text.slice(doc.source);
                     if (!opts.normalize_whitespace) {
                         try appendDecodedSegment(&out, arena_alloc, text);
@@ -241,7 +253,7 @@ pub const ParseOptions = struct {
                     var idx = self.index + 1;
                     while (idx <= node_raw.subtree_end and idx < doc.nodes.len) : (idx += 1) {
                         const node = &doc.nodes[idx];
-                        if (!doc.isTextIndex(idx)) continue;
+                        if (!node.isText(idx)) continue;
                         try appendDecodedSegment(&out, arena_alloc, node.name_or_text.slice(doc.source));
                     }
                     return try out.toOwnedSlice(arena_alloc);
@@ -251,7 +263,7 @@ pub const ParseOptions = struct {
                 var idx = self.index + 1;
                 while (idx <= node_raw.subtree_end and idx < doc.nodes.len) : (idx += 1) {
                     const node = &doc.nodes[idx];
-                    if (!doc.isTextIndex(idx)) continue;
+                    if (!node.isText(idx)) continue;
                     try appendDecodedNormalizedSegment(&out, arena_alloc, node.name_or_text.slice(doc.source), &state);
                 }
                 return try out.toOwnedSlice(arena_alloc);
@@ -284,7 +296,7 @@ pub const ParseOptions = struct {
                 const node_raw = &self.doc.nodes[self.index];
                 var idx = node_raw.last_child;
                 while (idx != InvalidIndex) : (idx = self.doc.nodes[idx].prev_sibling) {
-                    if (self.doc.isElementIndex(idx)) return self.doc.nodeAt(idx);
+                    if (self.doc.nodes[idx].isElement(idx)) return self.doc.nodeAt(idx);
                 }
                 return null;
             }
@@ -301,7 +313,7 @@ pub const ParseOptions = struct {
                 const node_raw = &self.doc.nodes[self.index];
                 var idx = node_raw.prev_sibling;
                 while (idx != InvalidIndex) : (idx = self.doc.nodes[idx].prev_sibling) {
-                    if (self.doc.isElementIndex(idx)) return self.doc.nodeAt(idx);
+                    if (self.doc.nodes[idx].isElement(idx)) return self.doc.nodeAt(idx);
                 }
                 return null;
             }
@@ -398,7 +410,7 @@ pub const ParseOptions = struct {
                     try writeChildrenHtml(doc, idx, node_raw, writer);
                     return;
                 }
-                if (node_raw.attr_end == 0) {
+                if (node_raw.isText(idx)) {
                     try writer.writeAll(node_raw.name_or_text.slice(doc.source));
                     return;
                 }
@@ -422,7 +434,7 @@ pub const ParseOptions = struct {
                     try writeChildrenHtml(doc, idx, node_raw, writer);
                     return;
                 }
-                if (node_raw.attr_end == 0) {
+                if (node_raw.isText(idx)) {
                     try writer.writeAll(node_raw.name_or_text.slice(doc.source));
                     return;
                 }
@@ -710,7 +722,7 @@ pub const ParseOptions = struct {
                         if (idx <= self.scope_root or idx > root.subtree_end) continue;
                     }
 
-                    if (!self.doc.isElementIndex(idx)) continue;
+                    if (!self.doc.nodes[idx].isElement(idx)) continue;
 
                     if (matcher.matchesSelectorAt(DocType, self.doc, self.selector, idx, self.scope_root)) {
                         self.next_index += 1;
@@ -794,7 +806,6 @@ pub const ParseOptions = struct {
             //! Parsed document owner and query entrypoint container.
             const DocSelf = @This();
             const DebugQueryResultType = options.QueryDebugResult();
-            const RawNodeType = options.GetNodeRaw();
             const ChildrenIterType = options.ChildrenIter();
             const NodeTypeWrapper = options.GetNode();
             const QueryIterType = options.QueryIter();
@@ -805,7 +816,7 @@ pub const ParseOptions = struct {
             source: options.GetInput(),
 
             /// Parsed node storage.
-            nodes: []RawNodeType = &[_]RawNodeType{},
+            nodes: []RawNode = &[_]RawNode{},
 
             /// Initializes an empty document using `allocator` for internal storage.
             pub fn init(allocator: std.mem.Allocator) DocSelf {
@@ -819,7 +830,7 @@ pub const ParseOptions = struct {
             pub fn deinit(noalias self: *DocSelf) void {
                 if (self.nodes.len != 0) {
                     self.allocator.free(self.nodes);
-                    self.nodes = &[_]RawNodeType{};
+                    self.nodes = &[_]RawNode{};
                 }
             }
 
@@ -828,7 +839,7 @@ pub const ParseOptions = struct {
                 self.source = emptySource();
                 if (self.nodes.len != 0) {
                     self.allocator.free(self.nodes);
-                    self.nodes = &[_]RawNodeType{};
+                    self.nodes = &[_]RawNode{};
                 }
             }
 
@@ -977,21 +988,6 @@ pub const ParseOptions = struct {
                 return self.nodes[idx].parent;
             }
 
-            /// Returns whether `idx` is the document root node.
-            pub inline fn isDocumentIndex(_: *const DocSelf, idx: IndexInt) bool {
-                return idx == 0;
-            }
-
-            /// Returns whether `idx` is an element node.
-            pub inline fn isElementIndex(self: *const DocSelf, idx: IndexInt) bool {
-                return idx != 0 and idx < self.nodes.len and self.nodes[idx].attr_end != 0;
-            }
-
-            /// Returns whether `idx` is a text node.
-            pub inline fn isTextIndex(self: *const DocSelf, idx: IndexInt) bool {
-                return idx != 0 and idx < self.nodes.len and self.nodes[idx].attr_end == 0;
-            }
-
             /// Returns first `<html>` element in the document.
             pub fn html(self: *const DocSelf) ?NodeTypeWrapper {
                 return self.findFirstTag("html");
@@ -1022,7 +1018,7 @@ pub const ParseOptions = struct {
                 var i: usize = 1;
                 while (i < self.nodes.len) : (i += 1) {
                     const n = &self.nodes[i];
-                    if (!self.isElementIndex(@intCast(i))) continue;
+                    if (!n.isElement(@intCast(i))) continue;
                     if (tables.eqlIgnoreCaseAscii(n.name_or_text.slice(self.source), name)) return self.nodeAt(@intCast(i));
                 }
                 return null;
@@ -1068,7 +1064,7 @@ pub const ParseOptions = struct {
                 if (candidate1 >= self.nodes.len) return InvalidIndex;
 
                 const node1 = &self.nodes[candidate1];
-                if (self.isElementIndex(candidate1)) {
+                if (node1.isElement(candidate1)) {
                     if (node1.parent == parent_idx) return candidate1;
                     return InvalidIndex;
                 }
@@ -1077,16 +1073,16 @@ pub const ParseOptions = struct {
                 if (candidate2 >= self.nodes.len) return InvalidIndex;
 
                 const node2 = &self.nodes[candidate2];
-                if (self.isTextIndex(candidate2)) {
+                if (node2.isText(candidate2)) {
                     @branchHint(.cold);
                     var scan: IndexInt = candidate2;
-                    while (scan < self.nodes.len and self.isTextIndex(scan)) : (scan += 1) {}
+                    while (scan < self.nodes.len and self.nodes[scan].isText(scan)) : (scan += 1) {}
                     if (scan >= self.nodes.len) return InvalidIndex;
                     const scanned = &self.nodes[scan];
-                    if (scanned.parent == parent_idx and self.isElementIndex(scan)) return scan;
+                    if (scanned.parent == parent_idx and scanned.isElement(scan)) return scan;
                     return InvalidIndex;
                 }
-                if (node2.parent == parent_idx and self.isElementIndex(candidate2)) return candidate2;
+                if (node2.parent == parent_idx and node2.isElement(candidate2)) return candidate2;
                 return InvalidIndex;
             }
 
@@ -1094,7 +1090,7 @@ pub const ParseOptions = struct {
             pub fn nextElementSiblingIndex(self: *const DocSelf, node_idx: IndexInt) IndexInt {
                 if (node_idx >= self.nodes.len) return InvalidIndex;
                 const node = &self.nodes[node_idx];
-                if (!self.isElementIndex(node_idx)) return InvalidIndex;
+                if (!node.isElement(node_idx)) return InvalidIndex;
                 const parent_idx = node.parent;
                 if (parent_idx == InvalidIndex) return InvalidIndex;
 
@@ -1102,8 +1098,8 @@ pub const ParseOptions = struct {
                 while (candidate < self.nodes.len) : (candidate += 1) {
                     const cand = &self.nodes[candidate];
                     if (cand.parent != parent_idx) return InvalidIndex;
-                    if (self.isElementIndex(candidate)) return candidate;
-                    if (!self.isTextIndex(candidate)) return InvalidIndex;
+                    if (cand.isElement(candidate)) return candidate;
+                    if (!cand.isText(candidate)) return InvalidIndex;
                 }
                 return InvalidIndex;
             }
@@ -1150,7 +1146,7 @@ pub const Span = struct {
 const DefaultTypeOptions: ParseOptions = .{};
 const StrictTypeOptions: ParseOptions = .{ .drop_whitespace_text_nodes = false };
 const NonDestructiveTypeOptions: ParseOptions = .{ .non_destructive = true };
-const NodeRaw = DefaultTypeOptions.GetNodeRaw();
+const NodeRaw = RawNode;
 const Node = DefaultTypeOptions.GetNode();
 /// Re-exported text extraction options used by node text APIs.
 pub const TextOptions = Node.TextOptions;
