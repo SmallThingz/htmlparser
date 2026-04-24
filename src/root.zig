@@ -38,14 +38,14 @@ pub const queryAllCachedWithHooks = instrumentation.queryAllCachedWithHooks;
 
 /// Parses `input` into a freshly initialized document and returns it.
 /// The returned document borrows `input`, so `input` must outlive the document.
-pub fn parse(comptime options: ParseOptions, allocator: std.mem.Allocator, input: options.GetInput()) !options.GetDocument() {
+pub fn parse(comptime options: ParseOptions, allocator: std.mem.Allocator, input: options.Input()) !options.Document() {
     return options.parse(allocator, input);
 }
 
 test "smoke parse/query" {
     const alloc = std.testing.allocator;
     const opts: ParseOptions = .{};
-    const Document = opts.GetDocument();
+    const Document = opts.Document();
 
     var doc = Document.init(alloc);
     defer doc.deinit();
@@ -115,7 +115,7 @@ test "parse options helper parses directly" {
 test "writeHtml serializes node subtree" {
     const alloc = std.testing.allocator;
     const opts: ParseOptions = .{};
-    const Document = opts.GetDocument();
+    const Document = opts.Document();
 
     var doc = Document.init(alloc);
     defer doc.deinit();
@@ -134,7 +134,7 @@ test "writeHtml serializes node subtree" {
 test "writeHtml respects in-place attr parsing and void tags" {
     const alloc = std.testing.allocator;
     const opts: ParseOptions = .{};
-    const Document = opts.GetDocument();
+    const Document = opts.Document();
 
     var doc = Document.init(alloc);
     defer doc.deinit();
@@ -155,7 +155,7 @@ test "writeHtml respects in-place attr parsing and void tags" {
 test "writeHtml reflects in-place text decoding" {
     const alloc = std.testing.allocator;
     const opts: ParseOptions = .{};
-    const Document = opts.GetDocument();
+    const Document = opts.Document();
 
     var doc = Document.init(alloc);
     defer doc.deinit();
@@ -175,7 +175,7 @@ test "writeHtml reflects in-place text decoding" {
 test "writeHtml drops whitespace-only text nodes when configured" {
     const alloc = std.testing.allocator;
     const opts: ParseOptions = .{};
-    const Document = opts.GetDocument();
+    const Document = opts.Document();
 
     var doc = Document.init(alloc);
     defer doc.deinit();
@@ -194,7 +194,7 @@ test "writeHtml drops whitespace-only text nodes when configured" {
 test "writeHtml parses and prints complex document" {
     const alloc = std.testing.allocator;
     const opts: ParseOptions = .{ .drop_whitespace_text_nodes = false };
-    const Document = opts.GetDocument();
+    const Document = opts.Document();
 
     var doc = Document.init(alloc);
     defer doc.deinit();
@@ -247,7 +247,7 @@ test "writeHtml parses and prints complex document" {
 test "writeHtmlSelf excludes children" {
     const alloc = std.testing.allocator;
     const opts: ParseOptions = .{};
-    const Document = opts.GetDocument();
+    const Document = opts.Document();
 
     var doc = Document.init(alloc);
     defer doc.deinit();

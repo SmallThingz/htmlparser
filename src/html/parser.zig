@@ -17,10 +17,10 @@ const MaxInitialNodeReserve: usize = 1 << 20;
 // parsing is read-only and any lazy decode work happens outside this file.
 
 /// Parses `input` and returns a fully owned document for `opts`.
-pub fn parse(comptime opts: ParseOptions, allocator: std.mem.Allocator, input: opts.GetInput()) !opts.GetDocument() {
+pub fn parse(comptime opts: ParseOptions, allocator: std.mem.Allocator, input: opts.Input()) !opts.Document() {
     if (!common.lenFits(input.len)) return error.InputTooLarge;
 
-    const Doc = opts.GetDocument();
+    const Doc = opts.Document();
     var doc = Doc.init(allocator);
     errdefer doc.deinit();
     doc.source = input;
@@ -43,7 +43,7 @@ pub fn parse(comptime opts: ParseOptions, allocator: std.mem.Allocator, input: o
 fn ParseState(comptime opts: ParseOptions) type {
     return struct {
         /// Document being populated with completed parse output.
-        doc: *opts.GetDocument(),
+        doc: *opts.Document(),
         /// Source bytes being tokenized for this parse pass.
         input: []const u8,
         /// Current byte cursor inside `input`.
@@ -54,7 +54,7 @@ fn ParseState(comptime opts: ParseOptions) type {
         parse_stack: std.ArrayListUnmanaged(OpenElem) = .empty,
 
         const Self = @This();
-        const Doc = opts.GetDocument();
+        const Doc = opts.Document();
         const OpenElem = struct {
             /// First-8-bytes lowercase key for the open tag name.
             tag_key: u64 = 0,
@@ -585,9 +585,9 @@ fn ParseState(comptime opts: ParseOptions) type {
 const DefaultTestOptions: ParseOptions = .{};
 const StrictTestOptions: ParseOptions = .{ .drop_whitespace_text_nodes = false };
 const NonDestructiveTestOptions: ParseOptions = .{ .non_destructive = true };
-const TestDocument = DefaultTestOptions.GetDocument();
-const StrictTestDocument = StrictTestOptions.GetDocument();
-const NonDestructiveTestDocument = NonDestructiveTestOptions.GetDocument();
+const TestDocument = DefaultTestOptions.Document();
+const StrictTestDocument = StrictTestOptions.Document();
+const NonDestructiveTestDocument = NonDestructiveTestOptions.Document();
 
 fn expectDocumentStructureValid(doc: anytype) !void {
     const testing = std.testing;

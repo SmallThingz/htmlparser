@@ -1,7 +1,7 @@
 const std = @import("std");
 const html = @import("html");
 const default_options: html.ParseOptions = .{};
-const Document = default_options.GetDocument();
+const Document = default_options.Document();
 
 const Hooks = struct {
     parse_start_calls: usize = 0,

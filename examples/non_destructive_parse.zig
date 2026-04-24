@@ -1,7 +1,7 @@
 const std = @import("std");
 const html = @import("html");
 const options: html.ParseOptions = .{ .non_destructive = true };
-const Document = options.GetDocument();
+const Document = options.Document();
 
 pub fn run() !void {
     try runBufferCase();

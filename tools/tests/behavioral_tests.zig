@@ -1,7 +1,7 @@
 const std = @import("std");
 const html = @import("html");
 const default_options: html.ParseOptions = .{};
-const Document = default_options.GetDocument();
+const Document = default_options.Document();
 
 test "document helpers find html/head/body on full documents and return null for fragments" {
     var doc = Document.init(std.testing.allocator);

@@ -5,12 +5,12 @@ const ParseMode = parse_mode.ParseMode;
 
 fn strictestDocumentType() type {
     const options: html.ParseOptions = .{ .drop_whitespace_text_nodes = false };
-    return options.GetDocument();
+    return options.Document();
 }
 
 fn fastestDocumentType() type {
     const options: html.ParseOptions = .{};
-    return options.GetDocument();
+    return options.Document();
 }
 
 const ParsedFixture = union(ParseMode) {
@@ -47,7 +47,7 @@ fn parseFixtureDoc(io: std.Io, alloc: std.mem.Allocator, mode: ParseMode, fixtur
     return switch (mode) {
         .strictest => blk: {
             const options: html.ParseOptions = .{ .drop_whitespace_text_nodes = false };
-            const Document = options.GetDocument();
+            const Document = options.Document();
             var doc = Document.init(alloc);
             errdefer doc.deinit();
             try doc.parse(working);
@@ -55,7 +55,7 @@ fn parseFixtureDoc(io: std.Io, alloc: std.mem.Allocator, mode: ParseMode, fixtur
         },
         .fastest => blk: {
             const options: html.ParseOptions = .{};
-            const Document = options.GetDocument();
+            const Document = options.Document();
             var doc = Document.init(alloc);
             errdefer doc.deinit();
             try doc.parse(working);

@@ -16,7 +16,7 @@ fn nowNs(io: std.Io) i96 {
 pub fn runSynthetic(io: std.Io) !void {
     const alloc = std.heap.smp_allocator;
     const options: root.ParseOptions = .{};
-    const Document = options.GetDocument();
+    const Document = options.Document();
 
     var doc = Document.init(alloc);
     defer doc.deinit();
@@ -65,7 +65,7 @@ pub fn runParseFile(io: std.Io, path: []const u8, iterations: usize, mode: Parse
             switch (mode) {
                 .strictest => {
                     const options: root.ParseOptions = .{ .drop_whitespace_text_nodes = false };
-                    const Document = options.GetDocument();
+                    const Document = options.Document();
                     var doc = Document.init(iter_alloc);
                     defer doc.deinit();
                     const working = working_opt.?;
@@ -74,7 +74,7 @@ pub fn runParseFile(io: std.Io, path: []const u8, iterations: usize, mode: Parse
                 },
                 .fastest => {
                     const options: root.ParseOptions = .{};
-                    const Document = options.GetDocument();
+                    const Document = options.Document();
                     var doc = Document.init(iter_alloc);
                     defer doc.deinit();
                     try doc.parse(input);
@@ -119,7 +119,7 @@ pub fn runQueryMatch(io: std.Io, path: []const u8, selector: []const u8, iterati
     return switch (mode) {
         .strictest => blk: {
             const options: root.ParseOptions = .{ .drop_whitespace_text_nodes = false };
-            const Document = options.GetDocument();
+            const Document = options.Document();
             var doc = Document.init(alloc);
             defer doc.deinit();
             try doc.parse(working);
@@ -133,7 +133,7 @@ pub fn runQueryMatch(io: std.Io, path: []const u8, selector: []const u8, iterati
         },
         .fastest => blk: {
             const options: root.ParseOptions = .{};
-            const Document = options.GetDocument();
+            const Document = options.Document();
             var doc = Document.init(alloc);
             defer doc.deinit();
             try doc.parse(working);
@@ -166,7 +166,7 @@ pub fn runQueryCached(io: std.Io, path: []const u8, selector: []const u8, iterat
     return switch (mode) {
         .strictest => blk: {
             const options: root.ParseOptions = .{ .drop_whitespace_text_nodes = false };
-            const Document = options.GetDocument();
+            const Document = options.Document();
             var doc = Document.init(alloc);
             defer doc.deinit();
             try doc.parse(working);
@@ -180,7 +180,7 @@ pub fn runQueryCached(io: std.Io, path: []const u8, selector: []const u8, iterat
         },
         .fastest => blk: {
             const options: root.ParseOptions = .{};
-            const Document = options.GetDocument();
+            const Document = options.Document();
             var doc = Document.init(alloc);
             defer doc.deinit();
             try doc.parse(working);
@@ -266,9 +266,9 @@ pub fn main(init: std.process.Init) !void {
 test "bench smoke uses parse_mode module for both parse modes" {
     const alloc = std.testing.allocator;
     const fastest_options: root.ParseOptions = .{};
-    const FastestDocument = fastest_options.GetDocument();
+    const FastestDocument = fastest_options.Document();
     const strictest_options: root.ParseOptions = .{ .drop_whitespace_text_nodes = false };
-    const StrictestDocument = strictest_options.GetDocument();
+    const StrictestDocument = strictest_options.Document();
 
     var fastest_doc = FastestDocument.init(alloc);
     defer fastest_doc.deinit();

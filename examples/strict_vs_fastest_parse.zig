@@ -3,9 +3,9 @@ const html = @import("html");
 
 pub fn run() !void {
     const strictest_options: html.ParseOptions = .{ .drop_whitespace_text_nodes = false };
-    const StrictestDocument = strictest_options.GetDocument();
+    const StrictestDocument = strictest_options.Document();
     const fastest_options: html.ParseOptions = .{};
-    const FastestDocument = fastest_options.GetDocument();
+    const FastestDocument = fastest_options.Document();
 
     const fixture =
         "<html><body>" ++
