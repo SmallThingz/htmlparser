@@ -151,11 +151,7 @@ fn ParseState(comptime opts: ParseOptions) type {
             self.i = std.mem.indexOfScalarPos(u8, self.input, self.i, '<') orelse self.input.len;
             if (self.i == start) return;
 
-            const parent_idx = self.currentParent();
-            const node_idx = try self.appendTextNode(parent_idx);
-            var node = &self.nodes.items[node_idx];
-            node.name_or_text = .{ .start = @intCast(start), .end = @intCast(self.i) };
-            node.subtree_end = node_idx;
+            _ = try self.appendTextNode(start, self.i);
         }
 
         inline fn parseTextDropWhitespace(noalias self: *Self) !void {
@@ -168,11 +164,7 @@ fn ParseState(comptime opts: ParseOptions) type {
             if (self.i == start) return;
             if (!scanned.has_non_whitespace) return;
 
-            const parent_idx = self.currentParent();
-            const node_idx = try self.appendTextNode(parent_idx);
-            var node = &self.nodes.items[node_idx];
-            node.name_or_text = .{ .start = @intCast(start), .end = @intCast(self.i) };
-            node.subtree_end = node_idx;
+            _ = try self.appendTextNode(start, self.i);
         }
 
         fn parseOpeningTag(noalias self: *Self) !void {
@@ -245,11 +237,8 @@ fn ParseState(comptime opts: ParseOptions) type {
             // is ignored by quote-aware tag-end scanning.
             if (isSvgTag(tag_name, tag_name_key)) {
                 const svg_self_close = scanner.isExplicitSelfClosingTag(self.input, attr_bytes_start, tag_gt_index);
-                const parent_idx = self.currentParent();
-                const node_idx = try self.appendElementNode(parent_idx);
+                const node_idx = try self.appendElementNode(name_start, name_end, attr_bytes_end);
                 var node = &self.nodes.items[node_idx];
-                node.name_or_text = .{ .start = @intCast(name_start), .end = @intCast(name_end) };
-                node.attr_end = @intCast(attr_bytes_end);
                 if (svg_self_close) {
                     node.subtree_end = node_idx;
                     return;
@@ -261,10 +250,7 @@ fn ParseState(comptime opts: ParseOptions) type {
                     while (content_end > content_start and self.input[content_end - 1] != '<') : (content_end -= 1) {}
 
                     if (content_end > content_start) {
-                        const text_idx = try self.appendTextNode(node_idx);
-                        var text_node = &self.nodes.items[text_idx];
-                        text_node.name_or_text = .{ .start = @intCast(content_start), .end = @intCast(content_end - 1) };
-                        text_node.subtree_end = text_idx;
+                        _ = try self.appendTextNodeToParent(node_idx, content_start, content_end - 1);
                     }
 
                     node = &self.nodes.items[node_idx];
@@ -273,10 +259,7 @@ fn ParseState(comptime opts: ParseOptions) type {
                     return;
                 } else {
                     if (self.input.len > content_start) {
-                        const text_idx = try self.appendTextNode(node_idx);
-                        var text_node = &self.nodes.items[text_idx];
-                        text_node.name_or_text = .{ .start = @intCast(content_start), .end = @intCast(self.input.len) };
-                        text_node.subtree_end = text_idx;
+                        _ = try self.appendTextNodeToParent(node_idx, content_start, self.input.len);
                     }
                     node = &self.nodes.items[node_idx];
                     node.subtree_end = @intCast(self.nodes.items.len - 1);
@@ -285,20 +268,14 @@ fn ParseState(comptime opts: ParseOptions) type {
                 }
             }
 
-            const parent_idx = self.currentParent();
-            const node_idx = try self.appendElementNode(parent_idx);
+            const node_idx = try self.appendElementNode(name_start, name_end, attr_bytes_end);
             var node = &self.nodes.items[node_idx];
-            node.name_or_text = .{ .start = @intCast(name_start), .end = @intCast(name_end) };
-            node.attr_end = @intCast(attr_bytes_end);
 
             // Plaintext tags consume the rest of the document as one text child.
             if (!self_close and tags.isPlainTextTagWithKey(tag_name, tag_name_key)) {
                 const content_start = self.i;
                 if (self.input.len > content_start) {
-                    const text_idx = try self.appendTextNode(node_idx);
-                    var text_node = &self.nodes.items[text_idx];
-                    text_node.name_or_text = .{ .start = @intCast(content_start), .end = @intCast(self.input.len) };
-                    text_node.subtree_end = text_idx;
+                    _ = try self.appendTextNodeToParent(node_idx, content_start, self.input.len);
                 }
 
                 node = &self.nodes.items[node_idx];
@@ -313,10 +290,7 @@ fn ParseState(comptime opts: ParseOptions) type {
                 const content_start = self.i;
                 if (self.findRawTextClose(tag_name, self.i)) |close| {
                     if (close.content_end > content_start) {
-                        const text_idx = try self.appendTextNode(node_idx);
-                        var text_node = &self.nodes.items[text_idx];
-                        text_node.name_or_text = .{ .start = @intCast(content_start), .end = @intCast(close.content_end) };
-                        text_node.subtree_end = text_idx;
+                        _ = try self.appendTextNodeToParent(node_idx, content_start, close.content_end);
                     }
 
                     node = &self.nodes.items[node_idx];
@@ -326,10 +300,7 @@ fn ParseState(comptime opts: ParseOptions) type {
                 } else {
                     @branchHint(.cold);
                     if (self.input.len > content_start) {
-                        const text_idx = try self.appendTextNode(node_idx);
-                        var text_node = &self.nodes.items[text_idx];
-                        text_node.name_or_text = .{ .start = @intCast(content_start), .end = @intCast(self.input.len) };
-                        text_node.subtree_end = text_idx;
+                        _ = try self.appendTextNodeToParent(node_idx, content_start, self.input.len);
                     }
                     node = &self.nodes.items[node_idx];
                     node.subtree_end = @intCast(self.nodes.items.len - 1);
@@ -437,39 +408,44 @@ fn ParseState(comptime opts: ParseOptions) type {
             }
         }
 
-        fn appendTextNode(noalias self: *Self, parent_idx: IndexInt) !IndexInt {
+        fn appendNodeToParent(noalias self: *Self, parent_idx: IndexInt, node: RawNode) !IndexInt {
             const idx: IndexInt = @intCast(self.nodes.items.len);
-            const node: @TypeOf(self.nodes.items[0]) = .{
-                .parent = parent_idx,
-                .subtree_end = idx,
-            };
-            try self.nodes.append(self.doc.allocator, node);
+            const prev_sibling = if (parent_idx != InvalidIndex)
+                self.nodes.items[parent_idx].last_child
+            else
+                InvalidIndex;
+
+            var appended = node;
+            appended.parent = parent_idx;
+            appended.prev_sibling = prev_sibling;
+            appended.subtree_end = idx;
+
+            try self.nodes.append(self.doc.allocator, appended);
+            if (parent_idx != InvalidIndex) {
+                self.nodes.items[parent_idx].last_child = idx;
+            }
             return idx;
         }
 
-        fn appendElementNode(noalias self: *Self, parent_idx: IndexInt) !IndexInt {
-            const idx: IndexInt = @intCast(self.nodes.items.len);
-            const node: @TypeOf(self.nodes.items[0]) = .{
-                .parent = parent_idx,
-                .subtree_end = idx,
-            };
+        fn appendTextNode(noalias self: *Self, start: usize, end: usize) !IndexInt {
+            return self.appendTextNodeToParent(self.currentParent(), start, end);
+        }
 
-            try self.nodes.append(self.doc.allocator, node);
+        fn appendTextNodeToParent(noalias self: *Self, parent_idx: IndexInt, start: usize, end: usize) !IndexInt {
+            return self.appendNodeToParent(parent_idx, .{
+                .name_or_text = .{ .start = @intCast(start), .end = @intCast(end) },
+            });
+        }
 
-            if (parent_idx != InvalidIndex) {
-                // Children are stored in append order but linked backward through
-                // `prev_sibling` so append stays O(1).
-                var p = &self.nodes.items[parent_idx];
-                if (p.last_child == InvalidIndex) {
-                    p.last_child = idx;
-                } else {
-                    const prev = p.last_child;
-                    self.nodes.items[idx].prev_sibling = prev;
-                    p.last_child = idx;
-                }
-            }
+        fn appendElementNode(noalias self: *Self, name_start: usize, name_end: usize, attr_end: usize) !IndexInt {
+            return self.appendElementNodeToParent(self.currentParent(), name_start, name_end, attr_end);
+        }
 
-            return idx;
+        fn appendElementNodeToParent(noalias self: *Self, parent_idx: IndexInt, name_start: usize, name_end: usize, attr_end: usize) !IndexInt {
+            return self.appendNodeToParent(parent_idx, .{
+                .name_or_text = .{ .start = @intCast(name_start), .end = @intCast(name_end) },
+                .attr_end = @intCast(attr_end),
+            });
         }
 
         inline fn currentParent(noalias self: *Self) IndexInt {
