@@ -86,8 +86,8 @@ fn ParseState(comptime opts: ParseOptions) type {
 
             // Seed the synthetic document root so every parsed node has a stable
             // parent chain and the open-element stack always has a sentinel.
-            try self.nodes.append(self.doc.allocator, .{ .subtree_end = 0 });
-            try self.parse_stack.append(self.doc.allocator, .{
+            self.nodes.appendAssumeCapacity(.{ .subtree_end = 0 });
+            self.parse_stack.appendAssumeCapacity(.{
                 .idx = 0,
                 .tag_key = 0,
                 .tag_len = 0,
@@ -164,6 +164,12 @@ fn ParseState(comptime opts: ParseOptions) type {
             std.debug.assert(self.i + 1 < self.input.len);
 
             const start = self.i;
+            if (!tables.WhitespaceTable[self.input[start]]) {
+                self.i = std.mem.indexOfScalarPos(u8, self.input, start, '<') orelse self.input.len;
+                _ = try self.appendTextNode(start, self.i);
+                return;
+            }
+
             const scanned = scanner.scanTextRun(self.input, self.i);
             self.i = scanned.lt_index;
             if (!scanned.has_non_whitespace) return;
@@ -321,7 +327,11 @@ fn ParseState(comptime opts: ParseOptions) type {
             // Non-void, non-raw elements stay on the open stack until an
             // explicit close, an optional-close rule, or EOF pops them.
             self.skipDroppedWhitespaceAfterStartTag();
-            try self.parse_stack.append(self.doc.allocator, .{
+            if (self.parse_stack.items.len == self.parse_stack.capacity) {
+                @branchHint(.cold);
+                try self.parse_stack.ensureUnusedCapacity(self.doc.allocator, 1);
+            }
+            self.parse_stack.appendAssumeCapacity(.{
                 .idx = node_idx,
                 .tag_key = tag_name_key,
                 .tag_len = @intCast(tag_name.len),
@@ -412,40 +422,40 @@ fn ParseState(comptime opts: ParseOptions) type {
             }
         }
 
-        fn appendNodeToParent(noalias self: *Self, parent_idx: IndexInt, node: RawNode) !IndexInt {
+        inline fn appendNodeToParent(noalias self: *Self, parent_idx: IndexInt, node: RawNode) !IndexInt {
+            std.debug.assert(parent_idx != InvalidIndex);
             const idx: IndexInt = @intCast(self.nodes.items.len);
-            const prev_sibling = if (parent_idx != InvalidIndex)
-                self.nodes.items[parent_idx].last_child
-            else
-                InvalidIndex;
+            const prev_sibling = self.nodes.items[parent_idx].last_child;
 
             var appended = node;
             appended.parent = parent_idx;
             appended.prev_sibling = prev_sibling;
             appended.subtree_end = idx;
 
-            try self.nodes.append(self.doc.allocator, appended);
-            if (parent_idx != InvalidIndex) {
-                self.nodes.items[parent_idx].last_child = idx;
+            if (self.nodes.items.len == self.nodes.capacity) {
+                @branchHint(.cold);
+                try self.nodes.ensureUnusedCapacity(self.doc.allocator, 1);
             }
+            self.nodes.addOneAssumeCapacity().* = appended;
+            self.nodes.items[parent_idx].last_child = idx;
             return idx;
         }
 
-        fn appendTextNode(noalias self: *Self, start: usize, end: usize) !IndexInt {
+        inline fn appendTextNode(noalias self: *Self, start: usize, end: usize) !IndexInt {
             return self.appendTextNodeToParent(self.currentParent(), start, end);
         }
 
-        fn appendTextNodeToParent(noalias self: *Self, parent_idx: IndexInt, start: usize, end: usize) !IndexInt {
+        inline fn appendTextNodeToParent(noalias self: *Self, parent_idx: IndexInt, start: usize, end: usize) !IndexInt {
             return self.appendNodeToParent(parent_idx, .{
                 .name_or_text = .{ .start = @intCast(start), .end = @intCast(end) },
             });
         }
 
-        fn appendElementNode(noalias self: *Self, name_start: usize, name_end: usize, attr_end: usize) !IndexInt {
+        inline fn appendElementNode(noalias self: *Self, name_start: usize, name_end: usize, attr_end: usize) !IndexInt {
             return self.appendElementNodeToParent(self.currentParent(), name_start, name_end, attr_end);
         }
 
-        fn appendElementNodeToParent(noalias self: *Self, parent_idx: IndexInt, name_start: usize, name_end: usize, attr_end: usize) !IndexInt {
+        inline fn appendElementNodeToParent(noalias self: *Self, parent_idx: IndexInt, name_start: usize, name_end: usize, attr_end: usize) !IndexInt {
             return self.appendNodeToParent(parent_idx, .{
                 .name_or_text = .{ .start = @intCast(name_start), .end = @intCast(name_end) },
                 .attr_end = @intCast(attr_end),
@@ -453,7 +463,7 @@ fn ParseState(comptime opts: ParseOptions) type {
         }
 
         inline fn currentParent(noalias self: *Self) IndexInt {
-            if (self.parse_stack.items.len == 0) return InvalidIndex;
+            std.debug.assert(self.parse_stack.items.len != 0);
             return self.parse_stack.items[self.parse_stack.items.len - 1].idx;
         }
 
