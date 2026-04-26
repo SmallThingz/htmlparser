@@ -84,20 +84,6 @@ const KEY = struct {
     const SVG = litKey("svg");
 };
 
-/// Returns whether tag is HTML void tag.
-pub fn isVoidTag(name: []const u8) bool {
-    return isVoidTagWithKey(name, first8Key(name));
-}
-
-/// Returns whether tag is HTML text-only tag closed by explicit end-tag.
-///
-/// This intentionally includes `title` and `textarea` in addition to raw-text
-/// tags to keep parser behavior closer to HTML tokenization semantics while
-/// staying in this parser's simplified state machine.
-pub fn isRawTextTag(name: []const u8) bool {
-    return isRawTextTagWithKey(name, first8Key(name));
-}
-
 /// Fast void-tag check with caller-provided key.
 pub fn isVoidTagWithKey(name: []const u8, key: u64) bool {
     return switch (name.len) {
@@ -125,7 +111,11 @@ pub fn isVoidTagWithKey(name: []const u8, key: u64) bool {
     };
 }
 
-/// Fast text-only-tag check with caller-provided key.
+/// Returns whether tag is HTML text-only tag closed by explicit end-tag.
+///
+/// This intentionally includes `title` and `textarea` in addition to raw-text
+/// tags to keep parser behavior closer to HTML tokenization semantics while
+/// staying in this parser's simplified state machine.
 pub fn isRawTextTagWithKey(name: []const u8, key: u64) bool {
     return switch (name.len) {
         5 => key == KEY.STYLE or key == KEY.TITLE,
@@ -328,8 +318,8 @@ pub inline fn isSvgWithKey(name: []const u8, key: u64) bool {
 }
 
 test "tag helpers on canonical lowercase names" {
-    try std.testing.expect(isVoidTag("img"));
-    try std.testing.expect(isRawTextTag("script"));
+    try std.testing.expect(isVoidTagWithKey("img", first8Key("img")));
+    try std.testing.expect(isRawTextTagWithKey("script", first8Key("script")));
     try std.testing.expect(shouldImplicitlyCloseWithKeys("p", KEY.P, "blockquote", KEY.BLOCKQUOTE));
 }
 

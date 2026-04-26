@@ -9,7 +9,6 @@ const RawNode = document.RawNode;
 
 const InvalidIndex: IndexInt = common.InvalidIndex;
 const IndexInt = common.IndexInt;
-const SvgTagKey: u64 = tags.first8Key("svg");
 const InitialParseStackCapacity: usize = 1024;
 const MaxInitialNodeReserve: usize = 1 << 20;
 
@@ -259,7 +258,7 @@ fn ParseState(comptime opts: ParseOptions) type {
 
             // In case this is an svg tag: Note: we still treat svg's attribute like we do html attributes which is not 100% correct
             // This is preferred over the complications that arise from parsing as xml tho
-            if (isSvgTag(tag_name_key)) {
+            if (isSvgTagKey(tag_name_key)) {
                 return self.handleSvgTag(name_start, name_end, attr_end);
             } else if (tags.isPlainTextTagWithKey(tag_name, tag_name_key)) {
                 // Plaintext tags consume the rest of the document as one text child.
@@ -504,8 +503,13 @@ fn ParseState(comptime opts: ParseOptions) type {
             while (self.i < self.input.len and tables.WhitespaceTable[self.input[self.i]]) : (self.i += 1) {}
         }
 
-        inline fn isSvgTag(tag_key: u64) bool {
-            return tag_key == SvgTagKey;
+        inline fn isSvgTag(tag_name: []const u8) bool {
+            return tag_name.len == 3 and std.ascii.toLower(tag_name[0]) == 's' and
+                std.ascii.toLower(tag_name[0]) == 'v' and std.ascii.toLower(tag_name[0]) == 'g';
+        }
+
+        inline fn isSvgTagKey(tag_key: u64) bool {
+            return tag_key == comptime tags.first8Key("svg");
         }
 
         inline fn findSvgContentEnd(noalias self: *Self) ?usize {
@@ -533,7 +537,7 @@ fn ParseState(comptime opts: ParseOptions) type {
                         const name_start = self.i;
                         while (self.i < self.input.len and tables.TagNameCharTable[self.input[self.i]]) : (self.i += 1) {}
                         const gt = std.mem.indexOfScalarPos(u8, self.input, self.i, '>') orelse return null;
-                        if (self.i - name_start == 3 and isSvgTag(tags.first8Key(self.input[name_start..self.i]))) {
+                        if (self.i - name_start == 3 and isSvgTag(self.input[name_start..self.i])) {
                             depth -= 1;
                             if (depth == 0) {
                                 self.i = gt + 1;
@@ -552,7 +556,7 @@ fn ParseState(comptime opts: ParseOptions) type {
                         }
 
                         const tag_end = self.findTagEndRespectQuotes() orelse return null;
-                        if (name_end - name_start == 3 and isSvgTag(tags.first8Key(self.input[name_start..name_end])) and self.input[tag_end - 1] != '/') {
+                        if (name_end - name_start == 3 and isSvgTag(self.input[name_start..name_end]) and self.input[tag_end - 1] != '/') {
                             depth += 1;
                         }
                     },
