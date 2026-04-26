@@ -103,7 +103,7 @@ pub inline fn findSvgSubtreeEnd(hay: []const u8, start: usize) ?SvgEnd {
                 const gt = std.mem.indexOfScalarPos(u8, hay, j, '>') orelse return null;
                 if (isSvgTagName(hay[name_start..j])) {
                     depth -= 1;
-                    if (depth == 0) return gt + 1;
+                    if (depth == 0) return .{ .gt_index = gt, .content_end = lt };
                 }
                 i = gt + 1;
             },
@@ -146,14 +146,14 @@ test "findSvgSubtreeEnd handles nested svg and quoted attribute bait" {
     const s = "<svg id='outer'><g data-k=\"x<svg y='z'>q\"><svg id='inner'><rect/></svg></g></svg><p id='after'></p>";
     const open_gt = std.mem.indexOfScalarPos(u8, s, 0, '>') orelse return error.TestUnexpectedResult;
     const out = findSvgSubtreeEnd(s, open_gt + 1) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("<p id='after'></p>", s[out..]);
+    try std.testing.expectEqualStrings("<p id='after'></p>", s[out.gt_index + 1 ..]);
 }
 
 test "findSvgSubtreeEnd does not count nested self-closing svg as depth increase" {
     const s = "<svg id='outer'><svg id='inner' /><g/></svg><p id='after'></p>";
     const open_gt = std.mem.indexOfScalarPos(u8, s, 0, '>') orelse return error.TestUnexpectedResult;
     const out = findSvgSubtreeEnd(s, open_gt + 1) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("<p id='after'></p>", s[out..]);
+    try std.testing.expectEqualStrings("<p id='after'></p>", s[out.gt_index + 1 ..]);
 }
 
 test "findSvgSubtreeEnd returns null when subtree is unterminated" {

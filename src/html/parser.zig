@@ -88,7 +88,14 @@ fn ParseState(comptime opts: ParseOptions) type {
 
             // Seed the synthetic document root so every parsed node has a stable
             // parent chain and the open-element stack always has a sentinel.
-            self.nodes.appendAssumeCapacity(.{ .subtree_end = 0 });
+            self.nodes.appendAssumeCapacity(.{
+                .name_or_text = .{ .start = 0, .end = 0 },
+                .attr_end = .text_node,
+                .last_child = InvalidIndex,
+                .prev_sibling = InvalidIndex,
+                .parent = InvalidIndex,
+                .subtree_end = 0,
+            });
             self.parse_stack.appendAssumeCapacity(.{
                 .idx = 0,
                 .tag_key = 0,
@@ -125,11 +132,13 @@ fn ParseState(comptime opts: ParseOptions) type {
             }
 
             // Handle the last char; only possibility: self.i == self.input.len - 1
-            if (self.i == self.input.len - 1) {
+            // Done this way to prevent underflow/overflow
+            if (self.input.len - self.i == 1) {
+                const parent_idx = self.currentParent();
                 const last_idx = self.nodes.items.len - 1;
                 const last = &self.nodes.items[last_idx];
-                if (last.isText(last_idx)) {
-                    last.name_or_text.end = self.input.len;
+                if (last.isText(@intCast(last_idx)) and last.parent == parent_idx and last.name_or_text.end == self.i) {
+                    last.name_or_text.end = @intCast(self.input.len);
                 } else {
                     if (!(comptime opts.drop_whitespace_text_nodes) or !tables.WhitespaceTable[self.input[self.i]]) {
                         try self.addNode(.{self.i, self.input.len}, .text_node, .{});
@@ -168,13 +177,13 @@ fn ParseState(comptime opts: ParseOptions) type {
 
         /// Intended to be called from inside of parseOpeningTag to parse the remaining contents as text
         inline fn handleInvalidOpeningTag(noalias self: *Self, start: IndexInt) !void {
+            const parent_idx = self.currentParent();
             const last = &self.nodes.items[self.nodes.items.len - 1];
-            if (last.isText(@intCast(self.nodes.items.len - 1))) { // Merge the node if the last node is text already
-                self.i = std.mem.indexOfScalarPos(u8, self.input, self.i, '<') orelse self.input.len;
+            self.i = std.mem.indexOfScalarPos(u8, self.input, self.i, '<') orelse self.input.len;
+            if (last.isText(@intCast(self.nodes.items.len - 1)) and last.parent == parent_idx and last.name_or_text.end == start) { // Merge the node if the last node is text already
                 last.name_or_text.end = @intCast(self.i);
             } else { // append new node if last node was not text
-                try self.handleText();
-                self.nodes.items[self.nodes.items.len - 1].name_or_text.start = @intCast(start);
+                try self.addNode(.{start, self.i}, .text_node, .{});
             }
 
             std.debug.assert(self.i + 1 >= self.input.len or self.input[self.i] == '<');
@@ -191,6 +200,7 @@ fn ParseState(comptime opts: ParseOptions) type {
         ) !void {
             const parent_idx: IndexInt = @intCast(self.nodes.items.len);
             try self.addNode(.{name_start, name_end}, @enumFromInt(attr_end), .{});
+            if (self.input[attr_end - 1] == '/') return;
 
             const content_start = self.i;
             const end = blk: {
@@ -199,10 +209,14 @@ fn ParseState(comptime opts: ParseOptions) type {
                     break :blk end;
                 } else {
                     self.i = self.input.len;
-                    break :blk .{.gt_index = self.i, .content_end = self.i};
+                    break :blk scanner.SvgEnd{ .gt_index = self.i, .content_end = self.i };
                 }
             };
-            try self.addNode(.{content_start, end.content_end - 1}, .text_node, .{.parent = parent_idx});
+            if (content_start < end.content_end) {
+                @branchHint(.likely);
+                self.nodes.items[parent_idx].subtree_end = @intCast(self.nodes.items.len);
+                try self.addNode(.{content_start, end.content_end}, .text_node, .{.parent = parent_idx});
+            }
         }
 
         inline fn parseOpeningTag(noalias self: *Self) !void {
@@ -222,13 +236,12 @@ fn ParseState(comptime opts: ParseOptions) type {
                     tag_name_key |= @as(u64, c) << @as(u6, @intCast(tag_name_key_len * 8));
                     tag_name_key_len += 1;
                 }
-
             }
             const name_end = self.i;
             const tag_name = self.input[name_start..name_end];
 
             // Handle malformed input similar to browser; treated the `<` as text only
-            if (name_end == name_start or (self.i < self.input.len and !tables.TagNameCharTable[self.input[self.i]])) {
+            if (name_end == name_start or self.i >= self.input.len) {
                 @branchHint(.cold);
                 return self.handleInvalidOpeningTag(@intCast(name_start - 1));
             }
@@ -254,14 +267,20 @@ fn ParseState(comptime opts: ParseOptions) type {
                 return self.handleSvgTag(name_start, name_end, attr_end);
             } else if (tags.isPlainTextTagWithKey(tag_name, tag_name_key)) {
                 // Plaintext tags consume the rest of the document as one text child.
-                try self.addNode(.{self.i, self.input.len}, .text_node, .{});
+                const parent_idx: IndexInt = @intCast(self.nodes.items.len);
+                try self.addNode(.{name_start, name_end}, @enumFromInt(attr_end), .{});
+                if (self.i < self.input.len) {
+                    @branchHint(.likely);
+                    self.nodes.items[parent_idx].subtree_end = @intCast(self.nodes.items.len);
+                    try self.addNode(.{self.i, self.input.len}, .text_node, .{.parent = parent_idx});
+                }
                 self.i = self.input.len;
                 return;
             } else if (tags.isRawTextTagWithKey(tag_name, tag_name_key)) {
                 // Raw-text tags stay structured as elements, but their contents are
                 // copied as one opaque text child up to the matching close tag.
                 const parent_idx: IndexInt = @intCast(self.nodes.items.len);
-                try self.addNode(.{name_start, name_end}, attr_end, .{});
+                try self.addNode(.{name_start, name_end}, @enumFromInt(attr_end), .{});
 
                 const content_start = self.i;
                 const content_end = blk: {
@@ -274,7 +293,12 @@ fn ParseState(comptime opts: ParseOptions) type {
                     }
                 };
 
-                return self.addNode(.{content_start, content_end}, .text_node, .{.parent = parent_idx});
+                if (content_start < content_end) {
+                    @branchHint(.likely);
+                    self.nodes.items[parent_idx].subtree_end = @intCast(self.nodes.items.len);
+                    try self.addNode(.{content_start, content_end}, .text_node, .{.parent = parent_idx});
+                }
+                return;
             }
 
             // Optional-close HTML elements are resolved before the new element
@@ -290,7 +314,7 @@ fn ParseState(comptime opts: ParseOptions) type {
 
             // Non-void, non-raw elements stay on the open stack until an
             // explicit close, an optional-close rule, or EOF pops them.
-            self.parse_stack.append(.{.idx = node_idx, .tag_key = tag_name_key, .tag_len = @intCast(tag_name.len)});
+            try self.parse_stack.append(self.doc.allocator, .{.idx = @intCast(node_idx), .tag_key = tag_name_key, .tag_len = @intCast(tag_name.len)});
         }
 
         inline fn parseClosingTag(noalias self: *Self) void {
@@ -377,25 +401,26 @@ fn ParseState(comptime opts: ParseOptions) type {
             }
         }
 
-        inline fn addNode(noalias self: *Self, name_or_text: document.Span, attr_end: document.RawNode.AttrEnd, overrides: anytype) !void {
-            comptime for (std.meta.declarations(overrides)) |d| {
-                std.debug.assert(
-                    std.mem.eql(u8, d.name, "last_child") or
-                    std.mem.eql(u8, d.name, "prev_sibling") or
-                    std.mem.eql(u8, d.name, "parent") or
-                    std.mem.eql(u8, d.name, "subtree_end")
-                );
+        inline fn addNode(noalias self: *Self, name_or_text: anytype, attr_end: document.RawNode.AttrEnd, overrides: anytype) !void {
+            const Overrides = @TypeOf(overrides);
+            comptime for (@typeInfo(Overrides).@"struct".fields) |field| {
+                std.debug.assert(std.mem.eql(u8, field.name, "parent"));
             };
-            const parent_idx: IndexInt = @intCast(if (@hasField(overrides, "parent")) overrides.parent else self.currentParent());
+            const parent_idx: IndexInt = @intCast(if (@hasField(Overrides, "parent")) overrides.parent else self.currentParent());
+            const idx: IndexInt = @intCast(self.nodes.items.len);
 
-            @call(.always_inline, self.nodes.append, .{self.doc.allocator, document.RawNode{
-                .name_or_text = name_or_text,
+            try self.nodes.append(self.doc.allocator, .{
+                .name_or_text = .{
+                    .start = @intCast(name_or_text[0]),
+                    .end = @intCast(name_or_text[1]),
+                },
                 .attr_end = attr_end,
-                .last_child = @intCast(if (@hasField(overrides, "last_child")) overrides.last_child else self.nodes.items.len),
-                .prev_sibling = @intCast(if (@hasField(overrides, "prev_sibling")) overrides.prev_sibling else self.nodes.items[parent_idx].last_child),
+                .last_child = InvalidIndex,
+                .prev_sibling = self.nodes.items[parent_idx].last_child,
                 .parent = parent_idx,
-                .subtree_end = @intCast(if (@hasField(overrides, "subtree_end")) overrides.subtree_end else self.nodes.items.len),
-            }});
+                .subtree_end = idx,
+            });
+            self.nodes.items[parent_idx].last_child = idx;
         }
 
         inline fn currentParent(noalias self: *Self) IndexInt {
@@ -534,14 +559,14 @@ fn expectDocumentStructureValid(doc: anytype) !void {
     const testing = std.testing;
     const nodes = doc.nodes;
     try testing.expect(nodes.len >= 1);
-    try testing.expect(nodes[0].attr_end == 0);
+    try testing.expect(nodes[0].attr_end == .text_node);
     try testing.expect(nodes[0].parent == InvalidIndex);
     try testing.expectEqual(@as(IndexInt, @intCast(nodes.len - 1)), nodes[0].subtree_end);
 
     for (nodes, 0..) |node, i| {
         const idx: IndexInt = @intCast(i);
-        const is_text = idx != 0 and node.attr_end == 0;
-        const is_element = idx != 0 and node.attr_end != 0;
+        const is_text = idx != 0 and node.attr_end == .text_node;
+        const is_element = idx != 0 and node.attr_end != .text_node;
         const span_start: usize = @intCast(node.name_or_text.start);
         const span_end: usize = @intCast(node.name_or_text.end);
 
@@ -551,7 +576,7 @@ fn expectDocumentStructureValid(doc: anytype) !void {
         try testing.expect(@as(usize, @intCast(node.subtree_end)) < nodes.len);
 
         if (is_element) {
-            const attr_end: usize = @intCast(node.attr_end);
+            const attr_end: usize = @intCast(@intFromEnum(node.attr_end));
             try testing.expect(span_end <= attr_end);
             try testing.expect(attr_end <= doc.source.len);
         }
@@ -561,7 +586,7 @@ fn expectDocumentStructureValid(doc: anytype) !void {
         } else {
             const parent_idx: usize = @intCast(node.parent);
             try testing.expect(parent_idx < nodes.len);
-            try testing.expect(parent_idx == 0 or nodes[parent_idx].attr_end != 0);
+            try testing.expect(parent_idx == 0 or nodes[parent_idx].attr_end != .text_node);
             try testing.expect(nodes[parent_idx].subtree_end >= idx);
         }
 
@@ -892,7 +917,7 @@ test "raw text element metadata remains valid after child append growth" {
     try std.testing.expect(script.raw().subtree_end > script.index);
 
     const text_node = doc.nodes[script.index + 1];
-    try std.testing.expect(text_node.attr_end == 0);
+    try std.testing.expect(text_node.attr_end == .text_node);
     try std.testing.expectEqualStrings("const x = 1;", text_node.name_or_text.slice(doc.source));
 
     const div = doc.queryOne("div") orelse return error.TestUnexpectedResult;
