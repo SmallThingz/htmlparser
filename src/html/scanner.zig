@@ -5,20 +5,8 @@ const tables = @import("tables.zig");
 // All indexing stays within `hay.len` and is guarded by bounds checks or
 // debug asserts where assumptions are made.
 
-/// Result of scanning to a tag end while respecting quoted attributes.
-pub const TagEnd = struct {
-    /// Index of the closing `>` byte.
-    gt_index: usize,
-    /// End of the raw attribute region immediately before `>` or `/>`.
-    attr_end: usize,
-
-    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
-        try writer.print("TagEnd{{gt_index={}, attr_end={}}}", .{ self.gt_index, self.attr_end });
-    }
-};
-
 /// Scans from `start` to next `>` while skipping quoted `>` inside attributes.
-pub fn findTagEndRespectQuotes(hay: []const u8, _start: usize) ?TagEnd {
+pub fn findTagEndRespectQuotes(hay: []const u8, _start: usize) ?usize {
     std.debug.assert(_start <= hay.len);
     var start = _start;
     // Search for the next tag delimiter, but bounce over quoted attribute
@@ -28,10 +16,7 @@ pub fn findTagEndRespectQuotes(hay: []const u8, _start: usize) ?TagEnd {
         return null;
     };
     blk: switch (hay[end]) {
-        '>' => return .{
-            .gt_index = end,
-            .attr_end = end,
-        },
+        '>' => return end,
         '\'', '"' => |q| {
             start = 1 + end;
             start = 1 + (std.mem.indexOfScalarPos(u8, hay, start, q) orelse {
@@ -118,10 +103,10 @@ pub inline fn findSvgSubtreeEnd(hay: []const u8, start: usize) ?SvgEnd {
                 }
 
                 const tag_end = findTagEndRespectQuotes(hay, j) orelse return null;
-                if (isSvgTagName(hay[k..j]) and hay[tag_end.gt_index - 1] != '/') {
+                if (isSvgTagName(hay[k..j]) and hay[tag_end - 1] != '/') {
                     depth += 1;
                 }
-                i = tag_end.gt_index + 1;
+                i = tag_end + 1;
             },
         }
     }
@@ -138,8 +123,7 @@ inline fn isSvgTagName(name: []const u8) bool {
 test "findTagEndRespectQuotes handles quoted >" {
     const s = " x='1>2' y=z />";
     const out = findTagEndRespectQuotes(s, 0) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(usize, s.len - 1), out.gt_index);
-    try std.testing.expectEqual(@as(usize, s.len - 1), out.attr_end);
+    try std.testing.expectEqual(@as(usize, s.len - 1), out);
 }
 
 test "findSvgSubtreeEnd handles nested svg and quoted attribute bait" {
@@ -162,9 +146,3 @@ test "findSvgSubtreeEnd returns null when subtree is unterminated" {
     try std.testing.expect(findSvgSubtreeEnd(s, open_gt + 1) == null);
 }
 
-test "format tag end" {
-    const alloc = std.testing.allocator;
-    const rendered = try std.fmt.allocPrint(alloc, "{f}", .{TagEnd{ .gt_index = 10, .attr_end = 7 }});
-    defer alloc.free(rendered);
-    try std.testing.expectEqualStrings("TagEnd{gt_index=10, attr_end=7}", rendered);
-}

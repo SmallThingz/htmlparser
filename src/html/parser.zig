@@ -21,6 +21,7 @@ const MaxInitialNodeReserve: usize = 1 << 20;
 /// Parses `input` and returns a fully owned document for `opts`.
 pub fn parse(comptime opts: ParseOptions, allocator: std.mem.Allocator, input: opts.Input()) !opts.Document() {
     if (!common.lenFits(input.len)) return error.InputTooLarge;
+    if (input.len == 0) return error.InvalidInput;
 
     const Doc = opts.Document();
     var doc = Doc.init(allocator);
@@ -224,17 +225,19 @@ fn ParseState(comptime opts: ParseOptions) type {
 
             const name_start = self.i;
             var tag_name_key: u64 = 0;
-            var tag_name_key_len: u8 = 0;
-            while (self.i < self.input.len and tables.TagNameCharTable[self.input[self.i]]) : (self.i += 1) {
-                if (tag_name_key_len < 8) {
+            for (0 .. 8) |i| {
+                if (self.i < self.input.len and tables.TagNameCharTable[self.input[self.i]]) {
                     var c = self.input[self.i];
                     c = tables.lower(c);
                     if (!comptime opts.non_destructive) {
                         @constCast(self.input)[self.i] = c;
                     }
-                    tag_name_key |= @as(u64, c) << @as(u6, @intCast(tag_name_key_len * 8));
-                    tag_name_key_len += 1;
+                    tag_name_key |= @as(u64, c) << @as(u6, @intCast(i * 8));
+                } else {
+                    break;
                 }
+            } else {
+                while (self.i < self.input.len and tables.TagNameCharTable[self.input[self.i]]) : (self.i += 1) {}
             }
             const name_end = self.i;
             const tag_name = self.input[name_start..name_end];
@@ -250,8 +253,8 @@ fn ParseState(comptime opts: ParseOptions) type {
                     defer self.i += 1;
                     break :blk self.i;
                 } else if (scanner.findTagEndRespectQuotes(self.input, self.i)) |v| {
-                    self.i = v.gt_index + 1;
-                    break :blk v.attr_end;
+                    self.i = v + 1;
+                    break :blk v;
                 } else {
                     @branchHint(.cold);
                     // invalid tag, skip content; same as browser
@@ -262,7 +265,7 @@ fn ParseState(comptime opts: ParseOptions) type {
 
             // In case this is an svg tag: Note: we still treat svg's attribute like we do html attributes which is not 100% correct
             // This is preferred over the complications that arise from parsing as xml tho
-            if (isSvgTag(tag_name, tag_name_key)) {
+            if (isSvgTag(tag_name_key)) {
                 return self.handleSvgTag(name_start, name_end, attr_end);
             } else if (tags.isPlainTextTagWithKey(tag_name, tag_name_key)) {
                 // Plaintext tags consume the rest of the document as one text child.
@@ -283,7 +286,7 @@ fn ParseState(comptime opts: ParseOptions) type {
 
                 const content_start = self.i;
                 const content_end = blk: {
-                    if (self.findRawTextClose(tag_name, self.i)) |close| {
+                    if (self.findRawTextClose(tag_name, tag_name_key, self.i)) |close| {
                         self.i = close.close_end;
                         break :blk close.content_end;
                     } else {
@@ -318,22 +321,24 @@ fn ParseState(comptime opts: ParseOptions) type {
 
         inline fn parseClosingTag(noalias self: *Self) void {
             self.i += 2; // </
+            // no whitespace after `<` is allowed, same behavior as browser
 
             const name_start = self.i;
             var close_key: u64 = 0;
-            var close_key_len: u8 = 0;
-            // Closing tags rebuild the same first-8-bytes key so stack matching
-            // usually avoids slicing the stored element name.
-            while (self.i < self.input.len and tables.TagNameCharTable[self.input[self.i]]) : (self.i += 1) {
-                if (close_key_len < 8) {
+            // Closing tags rebuild the same first-8-bytes key so stack matching usually avoids slicing the stored element name.
+            for (0 .. 8) |i| {
+                if (self.i < self.input.len and tables.TagNameCharTable[self.input[self.i]]) {
                     var c = self.input[self.i];
                     c = tables.lower(c);
                     if (!comptime opts.non_destructive) {
                         @constCast(self.input)[self.i] = c;
                     }
-                    close_key |= @as(u64, c) << @as(u6, @intCast(close_key_len * 8));
-                    close_key_len += 1;
+                    close_key |= @as(u64, c) << @as(u6, @intCast(i * 8));
+                } else {
+                    break;
                 }
+            } else {
+                while (self.i < self.input.len and tables.TagNameCharTable[self.input[self.i]]) : (self.i += 1) {}
             }
             const name_end = self.i;
             const close_name = self.input[name_start..name_end];
@@ -460,7 +465,7 @@ fn ParseState(comptime opts: ParseOptions) type {
             self.i += 2;
             // Doctype-like nodes are skipped as opaque declarations.
             if (scanner.findTagEndRespectQuotes(self.input, self.i)) |tag_end| {
-                self.i = tag_end.gt_index + 1;
+                self.i = tag_end + 1;
             } else {
                 self.i = self.input.len;
             }
@@ -478,17 +483,15 @@ fn ParseState(comptime opts: ParseOptions) type {
             while (self.i < self.input.len and tables.WhitespaceTable[self.input[self.i]]) : (self.i += 1) {}
         }
 
-        inline fn isSvgTag(tag_name: []const u8, tag_key: u64) bool {
-            return tag_name.len == 3 and tag_key == SvgTagKey;
+        inline fn isSvgTag(tag_key: u64) bool {
+            return tag_key == SvgTagKey;
         }
 
-        inline fn findRawTextClose(noalias self: *Self, tag_name: []const u8, start: usize) ?struct { content_end: usize, close_end: usize } {
+        inline fn findRawTextClose(noalias self: *Self, tag_name: []const u8, tag_key: u64, start: usize) ?struct { content_end: usize, close_end: usize } {
+            std.debug.assert(tag_name.len != 0);
             // Raw-text scanning only recognizes a real `</tag>` terminator.
             // Everything else, including stray `<` bytes, stays in the text run.
             var j = std.mem.indexOfScalarPos(u8, self.input, start, '<') orelse return null;
-            const tag_len = tag_name.len;
-            if (tag_len == 0) return null;
-            const tag_key = tags.first8Key(tag_name);
             const first = tables.lower(tag_name[0]);
             while (j + 3 < self.input.len) {
                 if (self.input[j + 1] != '/') {
@@ -503,26 +506,32 @@ fn ParseState(comptime opts: ParseOptions) type {
                 var k = j + 2;
                 const name_start = k;
                 var close_key: u64 = 0;
-                var close_key_len: u8 = 0;
-                while (k < self.input.len and tables.TagNameCharTable[self.input[k]]) : (k += 1) {}
-                {
-                    var p = name_start;
-                    while (p < k and close_key_len < 8) : (p += 1) {
-                        close_key |= @as(u64, tables.lower(self.input[p])) << @as(u6, @intCast(close_key_len * 8));
-                        close_key_len += 1;
+                for (0 .. 8) |i| {
+                    if (self.i < self.input.len and tables.TagNameCharTable[self.input[self.i]]) {
+                        var c = self.input[self.i];
+                        c = tables.lower(c);
+                        if (!comptime opts.non_destructive) {
+                            @constCast(self.input)[self.i] = c;
+                        }
+                        close_key |= @as(u64, c) << @as(u6, @intCast(i * 8));
+                    } else {
+                        break;
                     }
+                } else {
+                    while (self.i < self.input.len and tables.TagNameCharTable[self.input[self.i]]) : (self.i += 1) {}
                 }
+
                 if (k == name_start) {
                     j = std.mem.indexOfScalarPos(u8, self.input, j + 1, '<') orelse return null;
                     continue;
                 }
 
-                if (k - name_start != tag_len or close_key != tag_key) {
+                if (k - name_start != tag_name.len or close_key != tag_key) {
                     j = std.mem.indexOfScalarPos(u8, self.input, j + 1, '<') orelse return null;
                     continue;
                 }
 
-                while (k < self.input.len and tables.WhitespaceTable[self.input[k]]) : (k += 1) {}
+                k = scanner.findTagEndRespectQuotes(self.input, k) orelse self.input.len;
                 if (k >= self.input.len or self.input[k] != '>') {
                     j = std.mem.indexOfScalarPos(u8, self.input, j + 1, '<') orelse return null;
                     continue;
