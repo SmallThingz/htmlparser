@@ -12,18 +12,9 @@ pub const TagEnd = struct {
     /// End of the raw attribute region immediately before `>` or `/>`.
     attr_end: usize,
 
-    /// Formats this tag end summary for human-readable output.
     pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.print("TagEnd{{gt_index={}, attr_end={}}}", .{ self.gt_index, self.attr_end });
     }
-};
-
-/// Result of scanning a text run up to the next `<`.
-pub const TextRun = struct {
-    /// Index of the next `<`, or `hay.len` when none exists.
-    lt_index: usize,
-    /// True when the scanned run contained any non-whitespace byte.
-    has_non_whitespace: bool,
 };
 
 /// Scans from `start` to next `>` while skipping quoted `>` inside attributes.
@@ -57,20 +48,21 @@ pub fn findTagEndRespectQuotes(hay: []const u8, _start: usize) ?TagEnd {
     }
 }
 
-/// Returns true when a tag ending at `gt_index` is explicitly self-closing
-/// via `.../>` (allowing whitespace before `>`).
-/// Only to be used for svg
-pub inline fn isExplicitSelfClosingTag(hay: []const u8, start: usize, gt_index: usize) bool {
-    if (gt_index == 0 or gt_index >= hay.len or hay[gt_index] != '>') return false;
-    var j = gt_index;
-    while (j > start and tables.WhitespaceTable[hay[j - 1]]) : (j -= 1) {}
-    return j > start and hay[j - 1] == '/';
-}
+pub const SvgEnd = struct {
+    /// Index of the closing `>` byte.
+    gt_index: usize,
+    /// End of the content inside the svg tag, right before the `<` of last `</svg>`
+    content_end: usize,
+
+    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        try writer.print("SvgEnd{{gt_index={}, content_end={}}}", .{ self.gt_index, self.content_end });
+    }
+};
 
 /// Scans from `start` (right after an opening `<svg...>` tag) to the matching
 /// closing `</svg>`, counting nested `<svg>` blocks and ignoring `<svg` text
 /// inside quoted attributes.
-pub fn findSvgSubtreeEnd(hay: []const u8, start: usize) ?usize {
+pub inline fn findSvgSubtreeEnd(hay: []const u8, start: usize) ?SvgEnd {
     var depth: usize = 1;
     var i = start;
     while (i < hay.len) {
@@ -126,7 +118,7 @@ pub fn findSvgSubtreeEnd(hay: []const u8, start: usize) ?usize {
                 }
 
                 const tag_end = findTagEndRespectQuotes(hay, j) orelse return null;
-                if (isSvgTagName(hay[k..j]) and !isExplicitSelfClosingTag(hay, j, tag_end.gt_index)) {
+                if (isSvgTagName(hay[k..j]) and hay[tag_end.gt_index - 1] != '/') {
                     depth += 1;
                 }
                 i = tag_end.gt_index + 1;
@@ -148,20 +140,6 @@ test "findTagEndRespectQuotes handles quoted >" {
     const out = findTagEndRespectQuotes(s, 0) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, s.len - 1), out.gt_index);
     try std.testing.expectEqual(@as(usize, s.len - 1), out.attr_end);
-}
-
-test "isExplicitSelfClosingTag detects slash before > with optional whitespace" {
-    const a = " x='1' />";
-    const a_gt = std.mem.indexOfScalarPos(u8, a, 0, '>') orelse return error.TestUnexpectedResult;
-    try std.testing.expect(isExplicitSelfClosingTag(a, 0, a_gt));
-
-    const b = " x='1'/   >";
-    const b_gt = std.mem.indexOfScalarPos(u8, b, 0, '>') orelse return error.TestUnexpectedResult;
-    try std.testing.expect(isExplicitSelfClosingTag(b, 0, b_gt));
-
-    const c = " x='1' >";
-    const c_gt = std.mem.indexOfScalarPos(u8, c, 0, '>') orelse return error.TestUnexpectedResult;
-    try std.testing.expect(!isExplicitSelfClosingTag(c, 0, c_gt));
 }
 
 test "findSvgSubtreeEnd handles nested svg and quoted attribute bait" {

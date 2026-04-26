@@ -102,7 +102,7 @@ fn ParseState(comptime opts: ParseOptions) type {
             // while specialized helpers handle the actual node construction.
             while (self.i + 1 < self.input.len) {
                 if (self.input[self.i] != '<') {
-                    try self.parseText();
+                    try self.handleText();
                 } else switch (self.input[self.i + 1]) {
                     '/' => self.parseClosingTag(),
                     '?' => {
@@ -143,7 +143,7 @@ fn ParseState(comptime opts: ParseOptions) type {
             self.parse_stack.clearRetainingCapacity();
         }
 
-        inline fn parseText(noalias self: *Self) !void {
+        inline fn handleText(noalias self: *Self) !void {
             std.debug.assert(self.input[self.i] != '<');
             std.debug.assert(self.i + 1 < self.input.len);
 
@@ -163,22 +163,57 @@ fn ParseState(comptime opts: ParseOptions) type {
             _ = try self.appendTextNode(start, self.i);
         }
 
+        /// Intended to be called from inside of parseOpeningTag to parse the remaining contents as text
         inline fn handleInvalidOpeningTag(noalias self: *Self, start: IndexInt) !void {
             const last = &self.nodes.items[self.nodes.items.len - 1];
             if (last.isText(@intCast(self.nodes.items.len - 1))) { // Merge the node if the last node is text already
                 self.i = std.mem.indexOfScalarPos(u8, self.input, self.i, '<') orelse self.input.len;
                 last.name_or_text.end = @intCast(self.i);
             } else { // append new node if last node was not text
-                try self.parseText();
+                try self.handleText();
                 self.nodes.items[self.nodes.items.len - 1].name_or_text.start = @intCast(start);
             }
 
             std.debug.assert(self.i + 1 >= self.input.len or self.input[self.i] == '<');
         }
 
+        /// Intended to be called from inside of parseOpeningTag to parse the remaining contents as text
+        /// Skip SVG subtrees entirely to keep parse work focused on primary HTML content.
+        /// Nested <svg> blocks are counted; `<svg` in quoted attributes is ignored by quote-aware tag-end scanning.
+        inline fn handleSvgTag(
+            noalias self: *Self,
+            name_start: usize,
+            name_end: usize,
+            attr_end: usize,
+            tag_end: IndexInt
+        ) !void {
+            const svg_self_close = self.input[tag_end - 1] == '/';
+            const node_idx = try self.appendElementNode(name_start, name_end, attr_end);
+            var node = &self.nodes.items[node_idx];
+            if (svg_self_close) {
+                node.subtree_end = node_idx;
+                return;
+            }
+
+            const content_start = self.i;
+            const end = blk: {
+                if (scanner.findSvgSubtreeEnd(self.input, self.i)) |end| {
+                    self.i = end.gt_index + 1;
+                    break :blk end;
+                } else {
+                    self.i = self.input.len;
+                    break :blk .{.gt_index = self.i, .content_end = self.i};
+                }
+            };
+            _ = try self.appendTextNodeToParent(node_idx, content_start, end.content_end - 1);
+
+            node = &self.nodes.items[node_idx];
+            node.subtree_end = @intCast(self.nodes.items.len - 1);
+        }
+
         inline fn parseOpeningTag(noalias self: *Self) !void {
             self.i += 1; // <
-            self.skipWs();
+            // no whitespace after `<` is allowed, same behavior as browser
 
             const name_start = self.i;
             var tag_name_key: u64 = 0;
@@ -199,13 +234,11 @@ fn ParseState(comptime opts: ParseOptions) type {
             const tag_name = self.input[name_start..name_end];
 
             // Handle malformed input similar to browser; treated the `<` as text only
-            if (name_end == name_start) {
+            if (name_end == name_start or (self.i < self.input.len and !tables.TagNameCharTable[self.input[self.i]])) {
                 @branchHint(.cold);
                 return self.handleInvalidOpeningTag(@intCast(name_start - 1));
             }
 
-            self.skipWs();
-            const attr_start: usize = self.i;
             const attr_end, const tag_end: usize = blk: {
                 if (self.input[self.i] == '>') {
                     break :blk .{self.i, self.i};
@@ -213,10 +246,15 @@ fn ParseState(comptime opts: ParseOptions) type {
                     break :blk .{v.attr_end, v.gt_index};
                 } else {
                     @branchHint(.cold);
-                    // invalid tag, treat as text
+                    // invalid tag, skip content; same as browser
+                    self.i = self.input.len;
+                    return;
                 }
             };
 
+            // In case this is an svg tag: Note: we still treat svg's attribute like we do html attributes which is not 100% correct
+            // This is preferred over the complications that arise from parsing as xml tho
+            if (isSvgTag(tag_name, tag_name_key)) return self.handleSvgTag(name_start, name_end, attr_end, tag_end);
 
             // Optional-close HTML elements are resolved before the new element
             // is appended so sibling/parent links reflect the implied structure.
@@ -224,49 +262,9 @@ fn ParseState(comptime opts: ParseOptions) type {
                 self.applyImplicitClosures(tag_name, tag_name_key);
             }
 
-            if (self.i == self.input.len and attr_end < self.i) {
-                attr_end = self.i;
-            }
+            const self_close = tags.isVoidTagWithKey(tag_name, tag_name_key);
 
-            const self_close = tag_name.len <= 6 and tags.isVoidTagWithKey(tag_name, tag_name_key);
-
-            // Skip SVG subtrees entirely to keep parse work focused on primary HTML
-            // content. Nested <svg> blocks are counted; `<svg` in quoted attributes
-            // is ignored by quote-aware tag-end scanning.
-            if (isSvgTag(tag_name, tag_name_key)) {
-                const svg_self_close = scanner.isExplicitSelfClosingTag(self.input, attr_bytes_start, tag_gt_index);
-                const node_idx = try self.appendElementNode(name_start, name_end, attr_bytes_end);
-                var node = &self.nodes.items[node_idx];
-                if (svg_self_close) {
-                    node.subtree_end = node_idx;
-                    return;
-                }
-
-                const content_start = self.i;
-                if (scanner.findSvgSubtreeEnd(self.input, self.i)) |close_end| {
-                    var content_end = close_end;
-                    while (content_end > content_start and self.input[content_end - 1] != '<') : (content_end -= 1) {}
-
-                    if (content_end > content_start) {
-                        _ = try self.appendTextNodeToParent(node_idx, content_start, content_end - 1);
-                    }
-
-                    node = &self.nodes.items[node_idx];
-                    node.subtree_end = @intCast(self.nodes.items.len - 1);
-                    self.i = close_end;
-                    return;
-                } else {
-                    if (self.input.len > content_start) {
-                        _ = try self.appendTextNodeToParent(node_idx, content_start, self.input.len);
-                    }
-                    node = &self.nodes.items[node_idx];
-                    node.subtree_end = @intCast(self.nodes.items.len - 1);
-                    self.i = self.input.len;
-                    return;
-                }
-            }
-
-            const node_idx = try self.appendElementNode(name_start, name_end, attr_bytes_end);
+            const node_idx = try self.appendElementNode(name_start, name_end, attr_end);
             var node = &self.nodes.items[node_idx];
 
             // Plaintext tags consume the rest of the document as one text child.
