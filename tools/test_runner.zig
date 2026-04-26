@@ -439,7 +439,7 @@ fn worker(ctx: *WorkerCtx) void {
 
         ctx.print_mutex.lockUncancelable(ctx.io);
         defer ctx.print_mutex.unlock(ctx.io);
-        printTestOutput(test_name, result);
+        printTestOutput(ctx, test_name, result);
 
         ctx.count_mutex.lockUncancelable(ctx.io);
         switch (result.status) {
@@ -477,8 +477,18 @@ fn runChildTest(ctx: *WorkerCtx, test_name: []const u8) !ChildResult {
     }
     defer if (seed_buf) |b| ctx.gpa.free(b);
 
+    const pty_cmd = try buildScriptCommand(ctx.gpa, argv.items);
+    defer ctx.gpa.free(pty_cmd);
+
+    const script_argv = [_][]const u8{
+        "script",
+        "-qefc",
+        pty_cmd,
+        "/dev/null",
+    };
+
     const result = try std.process.run(ctx.gpa, ctx.io, .{
-        .argv = argv.items,
+        .argv = &script_argv,
         .stdout_limit = .limited(4 * 1024 * 1024),
         .stderr_limit = .limited(4 * 1024 * 1024),
     });
@@ -487,6 +497,7 @@ fn runChildTest(ctx: *WorkerCtx, test_name: []const u8) !ChildResult {
     return .{
         .status = status,
         .term = result.term,
+        // `script -qefc` multiplexes PTY stdout+stderr into stdout.
         .stdout = result.stdout,
         .stderr = result.stderr,
     };
@@ -504,7 +515,7 @@ fn classifyStatus(term: std.process.Child.Term) Status {
     }
 }
 
-fn printTestOutput(name: []const u8, res: ChildResult) void {
+fn printTestOutput(ctx: *const WorkerCtx, name: []const u8, res: ChildResult) void {
     const color = switch (res.status) {
         .pass => "\x1b[32m",
         .skip => "\x1b[94m",
@@ -518,43 +529,93 @@ fn printTestOutput(name: []const u8, res: ChildResult) void {
         .fail => "error",
     };
 
-    std.debug.print("{s}{s}\x1b[0m {s}", .{ color, label, name });
+    var out_buf: std.Io.Writer.Allocating = .init(ctx.gpa);
+    defer out_buf.deinit();
+    const w = &out_buf.writer;
+
+    if (res.status == .pass or res.status == .skip) {
+        w.print("{s}{s}\x1b[0m {s}", .{ color, label, name }) catch return;
+        if (res.stdout.len > 0) {
+            w.writeAll(" | out: ") catch return;
+            writeSingleLine(w, res.stdout, 200) catch return;
+        }
+        if (res.stderr.len > 0) {
+            w.writeAll(" | err: ") catch return;
+            writeSingleLine(w, res.stderr, 200) catch return;
+        }
+        switch (res.term) {
+            .exited => |code| if (code != 0) w.print(" | exit {d}", .{code}) catch return,
+            .signal => |sig| w.print(" | signal {d}", .{@intFromEnum(sig)}) catch return,
+            .stopped => |code| w.print(" | stopped {d}", .{code}) catch return,
+            .unknown => |code| w.print(" | unknown {d}", .{code}) catch return,
+        }
+        w.writeByte('\n') catch return;
+        std.Io.File.stdout().writeStreamingAll(ctx.io, out_buf.written()) catch {};
+        return;
+    }
+
+    w.print("{s}{s}\x1b[0m {s}", .{ color, label, name }) catch return;
+    switch (res.term) {
+        .exited => |code| if (code != 0) w.print(" | exit {d}", .{code}) catch return,
+        .signal => |sig| w.print(" | signal {d}", .{@intFromEnum(sig)}) catch return,
+        .stopped => |code| w.print(" | stopped {d}", .{code}) catch return,
+        .unknown => |code| w.print(" | unknown {d}", .{code}) catch return,
+    }
+    w.writeAll("\n\n") catch return;
 
     if (res.stdout.len > 0) {
-        std.debug.print(" | out: ", .{});
-        printSingleLine(res.stdout, 200);
+        w.writeAll("---- child output (pty merged stdout/stderr) ----\n") catch return;
+        w.writeAll(res.stdout) catch return;
+        if (res.stdout[res.stdout.len - 1] != '\n') w.writeByte('\n') catch return;
     }
     if (res.stderr.len > 0) {
-        std.debug.print(" | err: ", .{});
-        printSingleLine(res.stderr, 200);
+        w.writeAll("---- script stderr ----\n") catch return;
+        w.writeAll(res.stderr) catch return;
+        if (res.stderr[res.stderr.len - 1] != '\n') w.writeByte('\n') catch return;
     }
-
-    switch (res.term) {
-        .exited => |code| if (code != 0) std.debug.print(" | exit {d}", .{code}),
-        .signal => |sig| std.debug.print(" | signal {d}", .{@intFromEnum(sig)}),
-        .stopped => |code| std.debug.print(" | stopped {d}", .{code}),
-        .unknown => |code| std.debug.print(" | unknown {d}", .{code}),
-    }
-
-    std.debug.print("\n", .{});
+    w.writeByte('\n') catch return;
+    std.Io.File.stdout().writeStreamingAll(ctx.io, out_buf.written()) catch {};
 }
 
-fn printSingleLine(bytes: []const u8, max_len: usize) void {
+fn writeSingleLine(w: *std.Io.Writer, bytes: []const u8, max_len: usize) !void {
     var written: usize = 0;
     for (bytes) |c| {
         if (written >= max_len) break;
         switch (c) {
             '\n', '\r', '\t' => {
-                std.debug.print(" ", .{});
+                try w.writeByte(' ');
                 written += 1;
             },
             else => {
-                std.debug.print("{c}", .{c});
+                try w.print("{c}", .{c});
                 written += 1;
             },
         }
     }
-    if (bytes.len > max_len) std.debug.print("...", .{});
+    if (bytes.len > max_len) try w.writeAll("...");
+}
+
+fn buildScriptCommand(alloc: std.mem.Allocator, argv: []const []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(alloc);
+
+    for (argv, 0..) |arg, i| {
+        if (i != 0) try out.append(alloc, ' ');
+        try appendShellSingleQuoted(&out, alloc, arg);
+    }
+    return out.toOwnedSlice(alloc);
+}
+
+fn appendShellSingleQuoted(out: *std.ArrayList(u8), alloc: std.mem.Allocator, arg: []const u8) !void {
+    try out.append(alloc, '\'');
+    for (arg) |c| {
+        if (c == '\'') {
+            try out.appendSlice(alloc, "'\\''");
+        } else {
+            try out.append(alloc, c);
+        }
+    }
+    try out.append(alloc, '\'');
 }
 
 fn runSingleTest(init: std.process.Init.Minimal, name: []const u8, seed: ?u32) void {

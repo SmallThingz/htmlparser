@@ -26,26 +26,6 @@ pub const TextRun = struct {
     has_non_whitespace: bool,
 };
 
-/// Scans from `start` to the next `<`, tracking whether the run contains any
-/// non-whitespace bytes.
-///
-/// This is intended for parse paths that drop whitespace-only text nodes. When
-/// whitespace-only text must be preserved, the parser uses a plain `<` search
-/// instead.
-pub inline fn scanTextRun(hay: []const u8, start: usize) TextRun {
-    if (start >= hay.len) return .{ .lt_index = hay.len, .has_non_whitespace = false };
-
-    var i = start;
-    while (i < hay.len and tables.WhitespaceTable[hay[i]]) : (i += 1) {}
-    if (i == hay.len) return .{ .lt_index = hay.len, .has_non_whitespace = false };
-    if (hay[i] == '<') return .{ .lt_index = i, .has_non_whitespace = false };
-
-    return .{
-        .lt_index = std.mem.indexOfScalarPos(u8, hay, i, '<') orelse hay.len,
-        .has_non_whitespace = true,
-    };
-}
-
 /// Scans from `start` to next `>` while skipping quoted `>` inside attributes.
 pub fn findTagEndRespectQuotes(hay: []const u8, _start: usize) ?TagEnd {
     std.debug.assert(_start <= hay.len);
@@ -161,24 +141,6 @@ inline fn isSvgTagName(name: []const u8) bool {
         tables.lower(name[0]) == 's' and
         tables.lower(name[1]) == 'v' and
         tables.lower(name[2]) == 'g';
-}
-
-test "scanTextRun tracks next tag and whitespace-only runs" {
-    const a = scanTextRun(" \n\t<em>", 0);
-    try std.testing.expectEqual(@as(usize, 3), a.lt_index);
-    try std.testing.expect(!a.has_non_whitespace);
-
-    const b = scanTextRun("  hi<em>", 0);
-    try std.testing.expectEqual(@as(usize, 4), b.lt_index);
-    try std.testing.expect(b.has_non_whitespace);
-
-    const c = scanTextRun("plain text", 0);
-    try std.testing.expectEqual(@as(usize, 10), c.lt_index);
-    try std.testing.expect(c.has_non_whitespace);
-
-    const d = scanTextRun(" \n\t hi \n\t<em>", 0);
-    try std.testing.expectEqual(@as(usize, 9), d.lt_index);
-    try std.testing.expect(d.has_non_whitespace);
 }
 
 test "findTagEndRespectQuotes handles quoted >" {

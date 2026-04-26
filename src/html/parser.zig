@@ -102,11 +102,7 @@ fn ParseState(comptime opts: ParseOptions) type {
             // while specialized helpers handle the actual node construction.
             while (self.i + 1 < self.input.len) {
                 if (self.input[self.i] != '<') {
-                    if (comptime opts.drop_whitespace_text_nodes) {
-                        try self.parseTextDropWhitespace();
-                    } else {
-                        try self.parseTextKeepWhitespace();
-                    }
+                    try self.parseText();
                 } else switch (self.input[self.i + 1]) {
                     '/' => self.parseClosingTag(),
                     '?' => {
@@ -147,34 +143,37 @@ fn ParseState(comptime opts: ParseOptions) type {
             self.parse_stack.clearRetainingCapacity();
         }
 
-        inline fn parseTextKeepWhitespace(noalias self: *Self) !void {
-            comptime std.debug.assert(!opts.drop_whitespace_text_nodes);
+        inline fn parseText(noalias self: *Self) !void {
             std.debug.assert(self.input[self.i] != '<');
             std.debug.assert(self.i + 1 < self.input.len);
 
             const start = self.i;
-            self.i = std.mem.indexOfScalarPos(u8, self.input, self.i, '<') orelse self.input.len;
+            if (comptime opts.drop_whitespace_text_nodes) {
+                self.skipWs();
+                if (self.i == self.input.len) {
+                    @branchHint(.cold);
+                    return;
+                }
 
+                // likely to hit a tag after ws on normal documents
+                if (self.input[self.i] == '<') return;
+            }
+
+            self.i = std.mem.indexOfScalarPos(u8, self.input, self.i, '<') orelse self.input.len;
             _ = try self.appendTextNode(start, self.i);
         }
 
-        inline fn parseTextDropWhitespace(noalias self: *Self) !void {
-            comptime std.debug.assert(opts.drop_whitespace_text_nodes);
-            std.debug.assert(self.input[self.i] != '<');
-            std.debug.assert(self.i + 1 < self.input.len);
-
-            const start = self.i;
-            if (!tables.WhitespaceTable[self.input[start]]) {
-                self.i = std.mem.indexOfScalarPos(u8, self.input, start, '<') orelse self.input.len;
-                _ = try self.appendTextNode(start, self.i);
-                return;
+        inline fn handleInvalidOpeningTag(noalias self: *Self, start: IndexInt) !void {
+            const last = &self.nodes.items[self.nodes.items.len - 1];
+            if (last.isText(@intCast(self.nodes.items.len - 1))) { // Merge the node if the last node is text already
+                self.i = std.mem.indexOfScalarPos(u8, self.input, self.i, '<') orelse self.input.len;
+                last.name_or_text.end = @intCast(self.i);
+            } else { // append new node if last node was not text
+                try self.parseText();
+                self.nodes.items[self.nodes.items.len - 1].name_or_text.start = @intCast(start);
             }
 
-            const scanned = scanner.scanTextRun(self.input, self.i);
-            self.i = scanned.lt_index;
-            if (!scanned.has_non_whitespace) return;
-
-            _ = try self.appendTextNode(start, self.i);
+            std.debug.assert(self.i + 1 >= self.input.len or self.input[self.i] == '<');
         }
 
         inline fn parseOpeningTag(noalias self: *Self) !void {
@@ -184,31 +183,40 @@ fn ParseState(comptime opts: ParseOptions) type {
             const name_start = self.i;
             var tag_name_key: u64 = 0;
             var tag_name_key_len: u8 = 0;
-            // Parse the tag name once while opportunistically building the
-            // first-8-bytes lowercase key used by stack matching.
             while (self.i < self.input.len and tables.TagNameCharTable[self.input[self.i]]) : (self.i += 1) {
                 if (tag_name_key_len < 8) {
                     var c = self.input[self.i];
-                    if (c >= 'A' and c <= 'Z') {
-                        c = tables.lower(c);
-                        if (!comptime opts.non_destructive) {
-                            @constCast(self.input)[self.i] = c;
-                        }
+                    c = tables.lower(c);
+                    if (!comptime opts.non_destructive) {
+                        @constCast(self.input)[self.i] = c;
                     }
                     tag_name_key |= @as(u64, c) << @as(u6, @intCast(tag_name_key_len * 8));
                     tag_name_key_len += 1;
                 }
-            }
 
-            if (self.i == name_start) {
-                @branchHint(.cold);
-                // malformed tag, consume one byte and move on
-                self.i = @min(self.i + 1, self.input.len);
-                return;
             }
-
-            const tag_name = self.input[name_start..self.i];
             const name_end = self.i;
+            const tag_name = self.input[name_start..name_end];
+
+            // Handle malformed input similar to browser; treated the `<` as text only
+            if (name_end == name_start) {
+                @branchHint(.cold);
+                return self.handleInvalidOpeningTag(@intCast(name_start - 1));
+            }
+
+            self.skipWs();
+            const attr_start: usize = self.i;
+            const attr_end, const tag_end: usize = blk: {
+                if (self.input[self.i] == '>') {
+                    break :blk .{self.i, self.i};
+                } else if (scanner.findTagEndRespectQuotes(self.input, self.i)) |v| {
+                    break :blk .{v.attr_end, v.gt_index};
+                } else {
+                    @branchHint(.cold);
+                    // invalid tag, treat as text
+                }
+            };
+
 
             // Optional-close HTML elements are resolved before the new element
             // is appended so sibling/parent links reflect the implied structure.
@@ -216,28 +224,8 @@ fn ParseState(comptime opts: ParseOptions) type {
                 self.applyImplicitClosures(tag_name, tag_name_key);
             }
 
-            var attr_bytes_end: usize = self.i;
-            const attr_bytes_start: usize = self.i;
-            var tag_gt_index: usize = self.i;
-
-            if (self.i < self.input.len and self.input[self.i] == '>') {
-                tag_gt_index = self.i;
-                attr_bytes_end = self.i;
-                self.i += 1;
-            } else if (scanner.findTagEndRespectQuotes(self.input, self.i)) |tag_end| {
-                tag_gt_index = tag_end.gt_index;
-                attr_bytes_end = tag_end.attr_end;
-                self.i = tag_end.gt_index + 1;
-            } else {
-                @branchHint(.cold);
-                // Unterminated start tags degrade to "open until EOF".
-                attr_bytes_end = self.input.len;
-                self.i = self.input.len;
-                tag_gt_index = self.input.len;
-            }
-
-            if (self.i == self.input.len and attr_bytes_end < self.i) {
-                attr_bytes_end = self.i;
+            if (self.i == self.input.len and attr_end < self.i) {
+                attr_end = self.i;
             }
 
             const self_close = tag_name.len <= 6 and tags.isVoidTagWithKey(tag_name, tag_name_key);
