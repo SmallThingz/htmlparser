@@ -1,7 +1,6 @@
 const std = @import("std");
 const tables = @import("tables.zig");
 const tags = @import("tags.zig");
-const scanner = @import("scanner.zig");
 const common = @import("../common.zig");
 const document = @import("document.zig");
 
@@ -17,6 +16,40 @@ const MaxInitialNodeReserve: usize = 1 << 20;
 // SAFETY: Parser builds spans into `input`; indices are stored as `IndexInt`.
 // In destructive mode tag names are normalized in-place. In non-destructive mode
 // parsing is read-only and any lazy decode work happens outside this file.
+
+/// Scans from `start` to next `>` while skipping quoted `>` inside attributes.
+pub fn findTagEndRespectQuotes(hay: []const u8, _start: usize) ?usize {
+    std.debug.assert(_start <= hay.len);
+    var start = _start;
+    // Search for the next tag delimiter, but bounce over quoted attribute
+    // payloads so embedded `>` bytes do not terminate the tag early.
+    var end = @call(.always_inline, std.mem.indexOfAnyPos, .{ u8, hay, start, ">'\"" }) orelse {
+        @branchHint(.cold);
+        return null;
+    };
+    blk: switch (hay[end]) {
+        '>' => return end,
+        '\'', '"' => |q| {
+            start = 1 + end;
+            start = 1 + (std.mem.indexOfScalarPos(u8, hay, start, q) orelse {
+                @branchHint(.cold);
+                return null;
+            });
+            end = @call(.always_inline, std.mem.indexOfAnyPos, .{ u8, hay, start, ">'\"" }) orelse {
+                @branchHint(.cold);
+                return null;
+            };
+            continue :blk hay[end];
+        },
+        else => unreachable,
+    }
+}
+
+test "findTagEndRespectQuotes handles quoted >" {
+    const s = " x='1>2' y=z />";
+    const out = findTagEndRespectQuotes(s, 0) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, s.len - 1), out);
+}
 
 /// Parses `input` and returns a fully owned document for `opts`.
 pub fn parse(comptime opts: ParseOptions, allocator: std.mem.Allocator, input: opts.Input()) !opts.Document() {
@@ -203,19 +236,14 @@ fn ParseState(comptime opts: ParseOptions) type {
             if (self.input[attr_end - 1] == '/') return;
 
             const content_start = self.i;
-            const end = blk: {
-                if (scanner.findSvgSubtreeEnd(self.input, self.i)) |end| {
-                    self.i = end.gt_index + 1;
-                    break :blk end;
-                } else {
-                    self.i = self.input.len;
-                    break :blk scanner.SvgEnd{ .gt_index = self.i, .content_end = self.i };
-                }
+            const content_end = self.findSvgContentEnd() orelse blk: {
+                self.i = self.input.len;
+                break :blk self.i;
             };
-            if (content_start < end.content_end) {
+            if (content_start < content_end) {
                 @branchHint(.likely);
                 self.nodes.items[parent_idx].subtree_end = @intCast(self.nodes.items.len);
-                try self.addNode(.{content_start, end.content_end}, .text_node, .{.parent = parent_idx});
+                try self.addNode(.{content_start, content_end}, .text_node, .{.parent = parent_idx});
             }
         }
 
@@ -253,7 +281,7 @@ fn ParseState(comptime opts: ParseOptions) type {
                 if (self.input[self.i] == '>') {
                     defer self.i += 1;
                     break :blk self.i;
-                } else if (scanner.findTagEndRespectQuotes(self.input, self.i)) |v| {
+                } else if (findTagEndRespectQuotes(self.input, self.i)) |v| {
                     self.i = v + 1;
                     break :blk v;
                 } else {
@@ -466,7 +494,7 @@ fn ParseState(comptime opts: ParseOptions) type {
         fn skipBangNode(noalias self: *Self) void {
             self.i += 2;
             // Doctype-like nodes are skipped as opaque declarations.
-            if (scanner.findTagEndRespectQuotes(self.input, self.i)) |tag_end| {
+            if (findTagEndRespectQuotes(self.input, self.i)) |tag_end| {
                 self.i = tag_end + 1;
             } else {
                 self.i = self.input.len;
@@ -489,6 +517,59 @@ fn ParseState(comptime opts: ParseOptions) type {
             return tag_key == SvgTagKey;
         }
 
+        inline fn findSvgContentEnd(noalias self: *Self) ?usize {
+            var depth: usize = 1;
+            while (self.i < self.input.len) {
+                const lt = std.mem.indexOfScalarPos(u8, self.input, self.i, '<') orelse return null;
+                if (lt + 1 >= self.input.len) return null;
+
+                self.i = lt + 1;
+                self.skipWs();
+                if (self.i >= self.input.len) return null;
+
+                switch (self.input[self.i]) {
+                    '!' => {
+                        if (self.i + 2 < self.input.len and self.input[self.i + 1] == '-' and self.input[self.i + 2] == '-') {
+                            self.skipComment();
+                        } else {
+                            self.skipBangNode();
+                        }
+                    },
+                    '?' => self.skipPi(),
+                    '/' => {
+                        self.i += 1;
+                        self.skipWs();
+                        const name_start = self.i;
+                        while (self.i < self.input.len and tables.TagNameCharTable[self.input[self.i]]) : (self.i += 1) {}
+                        const gt = std.mem.indexOfScalarPos(u8, self.input, self.i, '>') orelse return null;
+                        if (self.i - name_start == 3 and isSvgTag(tags.first8Key(self.input[name_start..self.i]))) {
+                            depth -= 1;
+                            if (depth == 0) {
+                                self.i = gt + 1;
+                                return lt;
+                            }
+                        }
+                        self.i = gt + 1;
+                    },
+                    else => {
+                        const name_start = self.i;
+                        while (self.i < self.input.len and tables.TagNameCharTable[self.input[self.i]]) : (self.i += 1) {}
+                        if (self.i == name_start) {
+                            self.i = lt + 1;
+                            continue;
+                        }
+
+                        const tag_end = findTagEndRespectQuotes(self.input, self.i) orelse return null;
+                        if (self.i - name_start == 3 and isSvgTag(tags.first8Key(self.input[name_start..self.i])) and self.input[tag_end - 1] != '/') {
+                            depth += 1;
+                        }
+                        self.i = tag_end + 1;
+                    },
+                }
+            }
+            return null;
+        }
+
         inline fn findRawTextClose(noalias self: *Self, tag_name: []const u8, tag_key: u64, start: usize) ?struct { content_end: usize, close_end: usize } {
             std.debug.assert(tag_name.len != 0);
             // Raw-text scanning only recognizes a real `</tag>` terminator.
@@ -505,44 +586,44 @@ fn ParseState(comptime opts: ParseOptions) type {
                     continue;
                 }
 
-                var k = j + 2;
-                const name_start = k;
+                self.i = j + 2;
+                const name_start = self.i;
                 var close_key: u64 = 0;
                 for (0 .. 8) |i| {
-                    if (k < self.input.len and tables.TagNameCharTable[self.input[k]]) {
-                        var c = self.input[k];
+                    if (self.i < self.input.len and tables.TagNameCharTable[self.input[self.i]]) {
+                        var c = self.input[self.i];
                         c = tables.lower(c);
                         if (!comptime opts.non_destructive) {
-                            @constCast(self.input)[k] = c;
+                            @constCast(self.input)[self.i] = c;
                         }
                         close_key |= @as(u64, c) << @as(u6, @intCast(i * 8));
-                        k += 1;
+                        self.i += 1;
                     } else {
                         break;
                     }
                 } else {
-                    while (k < self.input.len and tables.TagNameCharTable[self.input[k]]) : (k += 1) {}
+                    while (self.i < self.input.len and tables.TagNameCharTable[self.input[self.i]]) : (self.i += 1) {}
                 }
 
-                if (k == name_start) {
+                if (self.i == name_start) {
                     j = std.mem.indexOfScalarPos(u8, self.input, j + 1, '<') orelse return null;
                     continue;
                 }
 
-                if (k - name_start != tag_name.len or close_key != tag_key) {
+                if (self.i - name_start != tag_name.len or close_key != tag_key) {
                     j = std.mem.indexOfScalarPos(u8, self.input, j + 1, '<') orelse return null;
                     continue;
                 }
 
-                k = scanner.findTagEndRespectQuotes(self.input, k) orelse self.input.len;
-                if (k >= self.input.len or self.input[k] != '>') {
+                self.i = findTagEndRespectQuotes(self.input, self.i) orelse self.input.len;
+                if (self.i >= self.input.len or self.input[self.i] != '>') {
                     j = std.mem.indexOfScalarPos(u8, self.input, j + 1, '<') orelse return null;
                     continue;
                 }
 
                 return .{
                     .content_end = j,
-                    .close_end = k + 1,
+                    .close_end = self.i + 1,
                 };
             }
             return null;
