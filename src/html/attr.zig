@@ -165,6 +165,10 @@ pub fn nativeEndian() std.builtin.Endian {
     return @import("builtin").cpu.arch.endian();
 }
 
+inline fn skipWhitespace(source: []const u8, end: usize, i: *usize) void {
+    while (i.* < end and tables.WhitespaceTable[source[i.*]]) : (i.* += 1) {}
+}
+
 inline fn hasConstSource(comptime Doc: type) bool {
     return @FieldType(Doc, "source") == []const u8;
 }
@@ -183,11 +187,11 @@ pub fn getAttrValue(noalias doc_ptr: anytype, node: anytype, name: []const u8, a
     const lookup_kind = classifyLookupName(name);
 
     var i: usize = node.name_or_text.end;
-    const end: usize = @intCast(@intFromEnum(node.attr_end));
+    const end = node.attrEnd();
     if (i >= end) return null;
 
     while (i < end) {
-        while (i < end and tables.WhitespaceTable[source[i]]) : (i += 1) {}
+        skipWhitespace(source, end, &i);
         if (i >= end) return null;
 
         const c = source[i];
@@ -267,7 +271,7 @@ pub fn collectSelectedValues(
     // Selector matching often probes a few attribute names repeatedly; this
     // helper resolves all requested names in one traversal of the attr span.
     var i: usize = node.name_or_text.end;
-    const end: usize = @intCast(@intFromEnum(node.attr_end));
+    const end = node.attrEnd();
     var remaining: usize = 0;
     for (out_values) |v| {
         if (v == null) remaining += 1;
@@ -275,7 +279,7 @@ pub fn collectSelectedValues(
     if (remaining == 0) return;
 
     while (i < end) {
-        while (i < end and tables.WhitespaceTable[source[i]]) : (i += 1) {}
+        skipWhitespace(source, end, &i);
         if (i >= end) break;
 
         const scanned = scanAttrNameOrSkip(source, end, i);
@@ -339,11 +343,11 @@ fn getAttrValueNonDestructive(doc: anytype, node: anytype, name: []const u8, all
     const lookup_kind = classifyLookupName(name);
 
     var i: usize = node.name_or_text.end;
-    const end: usize = @intCast(@intFromEnum(node.attr_end));
+    const end = node.attrEnd();
     if (i >= end) return null;
 
     while (i < end) {
-        while (i < end and tables.WhitespaceTable[source[i]]) : (i += 1) {}
+        skipWhitespace(source, end, &i);
         if (i >= end) return null;
 
         const c = source[i];

@@ -139,7 +139,7 @@ fn ParseState(comptime opts: ParseOptions) type {
                     last.name_or_text.end = @intCast(self.input.len);
                 } else {
                     if (!(comptime opts.drop_whitespace_text_nodes) or !tables.WhitespaceTable[self.input[self.i]]) {
-                        try self.addNode(.{self.i, self.input.len}, .text_node, .{});
+                        try self.addNode(.{ self.i, self.input.len }, .text_node, .{});
                     }
                 }
                 self.i += 1;
@@ -170,7 +170,7 @@ fn ParseState(comptime opts: ParseOptions) type {
             }
 
             self.i = std.mem.indexOfScalarPos(u8, self.input, self.i, '<') orelse self.input.len;
-            try self.addNode(.{start, self.i}, .text_node, .{});
+            try self.addNode(.{ start, self.i }, .text_node, .{});
         }
 
         /// Intended to be called from inside of parseOpeningTag to parse the remaining contents as text
@@ -181,7 +181,7 @@ fn ParseState(comptime opts: ParseOptions) type {
             if (last.isText(@intCast(self.nodes.items.len - 1)) and last.parent == parent_idx and last.name_or_text.end == start) { // Merge the node if the last node is text already
                 last.name_or_text.end = @intCast(self.i);
             } else { // append new node if last node was not text
-                try self.addNode(.{start, self.i}, .text_node, .{});
+                try self.addNode(.{ start, self.i }, .text_node, .{});
             }
 
             std.debug.assert(self.i >= self.input.len - 1 or self.input[self.i] == '<');
@@ -197,7 +197,7 @@ fn ParseState(comptime opts: ParseOptions) type {
             attr_end: usize,
         ) !void {
             const parent_idx: IndexInt = @intCast(self.nodes.items.len);
-            try self.addNode(.{name_start, name_end}, @enumFromInt(attr_end), .{});
+            try self.addNode(.{ name_start, name_end }, @enumFromInt(attr_end), .{});
             if (self.input[attr_end - 1] == '/') return;
 
             const content_start = self.i;
@@ -208,7 +208,7 @@ fn ParseState(comptime opts: ParseOptions) type {
             if (content_start < content_end) {
                 @branchHint(.likely);
                 self.nodes.items[parent_idx].subtree_end = @intCast(self.nodes.items.len);
-                try self.addNode(.{content_start, content_end}, .text_node, .{.parent = parent_idx});
+                try self.addNode(.{ content_start, content_end }, .text_node, .{ .parent = parent_idx });
             }
         }
 
@@ -218,7 +218,7 @@ fn ParseState(comptime opts: ParseOptions) type {
 
             const name_start = self.i;
             var tag_name_key: u64 = 0;
-            for (0 .. 8) |i| {
+            for (0..8) |i| {
                 if (self.i < self.input.len and tables.TagNameCharTable[self.input[self.i]]) {
                     var c = self.input[self.i];
                     c = tables.lower(c);
@@ -263,11 +263,11 @@ fn ParseState(comptime opts: ParseOptions) type {
             } else if (tags.isPlainTextTagWithKey(tag_name, tag_name_key)) {
                 // Plaintext tags consume the rest of the document as one text child.
                 const parent_idx: IndexInt = @intCast(self.nodes.items.len);
-                try self.addNode(.{name_start, name_end}, @enumFromInt(attr_end), .{});
+                try self.addNode(.{ name_start, name_end }, @enumFromInt(attr_end), .{});
                 if (self.i < self.input.len) {
                     @branchHint(.likely);
                     self.nodes.items[parent_idx].subtree_end = @intCast(self.nodes.items.len);
-                    try self.addNode(.{self.i, self.input.len}, .text_node, .{.parent = parent_idx});
+                    try self.addNode(.{ self.i, self.input.len }, .text_node, .{ .parent = parent_idx });
                 }
                 self.i = self.input.len;
                 return;
@@ -275,7 +275,7 @@ fn ParseState(comptime opts: ParseOptions) type {
                 // Raw-text tags stay structured as elements, but their contents are
                 // copied as one opaque text child up to the matching close tag.
                 const parent_idx: IndexInt = @intCast(self.nodes.items.len);
-                try self.addNode(.{name_start, name_end}, @enumFromInt(attr_end), .{});
+                try self.addNode(.{ name_start, name_end }, @enumFromInt(attr_end), .{});
 
                 const content_start = self.i;
                 const content_end = blk: {
@@ -291,7 +291,7 @@ fn ParseState(comptime opts: ParseOptions) type {
                 if (content_start < content_end) {
                     @branchHint(.likely);
                     self.nodes.items[parent_idx].subtree_end = @intCast(self.nodes.items.len);
-                    try self.addNode(.{content_start, content_end}, .text_node, .{.parent = parent_idx});
+                    try self.addNode(.{ content_start, content_end }, .text_node, .{ .parent = parent_idx });
                 }
                 return;
             }
@@ -303,13 +303,13 @@ fn ParseState(comptime opts: ParseOptions) type {
             }
 
             const node_idx = self.nodes.items.len;
-            try self.addNode(.{name_start, name_end}, @enumFromInt(attr_end), .{});
+            try self.addNode(.{ name_start, name_end }, @enumFromInt(attr_end), .{});
 
             if (tags.isVoidTagWithKey(tag_name, tag_name_key)) return;
 
             // Non-void, non-raw elements stay on the open stack until an
             // explicit close, an optional-close rule, or EOF pops them.
-            try self.parse_stack.append(self.doc.allocator, .{.idx = @intCast(node_idx), .tag_key = tag_name_key, .tag_len = @intCast(tag_name.len)});
+            try self.parse_stack.append(self.doc.allocator, .{ .idx = @intCast(node_idx), .tag_key = tag_name_key, .tag_len = @intCast(tag_name.len) });
         }
 
         inline fn parseClosingTag(noalias self: *Self) void {
@@ -319,7 +319,7 @@ fn ParseState(comptime opts: ParseOptions) type {
             const name_start = self.i;
             var close_key: u64 = 0;
             // Closing tags rebuild the same first-8-bytes key so stack matching usually avoids slicing the stored element name.
-            for (0 .. 8) |i| {
+            for (0..8) |i| {
                 if (self.i < self.input.len and tables.TagNameCharTable[self.input[self.i]]) {
                     var c = self.input[self.i];
                     c = tables.lower(c);
@@ -458,8 +458,7 @@ fn ParseState(comptime opts: ParseOptions) type {
         fn skipBangNode(noalias self: *Self) void {
             self.i += 2;
             // Doctype-like nodes are skipped as opaque declarations.
-            if (self.findTagEndRespectQuotes()) |_| {
-            } else {
+            if (self.findTagEndRespectQuotes()) |_| {} else {
                 self.i = self.input.len;
             }
         }
@@ -505,7 +504,7 @@ fn ParseState(comptime opts: ParseOptions) type {
 
         inline fn isSvgTag(tag_name: []const u8) bool {
             return tag_name.len == 3 and std.ascii.toLower(tag_name[0]) == 's' and
-                std.ascii.toLower(tag_name[0]) == 'v' and std.ascii.toLower(tag_name[0]) == 'g';
+                std.ascii.toLower(tag_name[1]) == 'v' and std.ascii.toLower(tag_name[2]) == 'g';
         }
 
         inline fn isSvgTagKey(tag_key: u64) bool {
@@ -584,7 +583,7 @@ fn ParseState(comptime opts: ParseOptions) type {
                 self.i = j + 2;
                 const name_start = self.i;
                 var close_key: u64 = 0;
-                for (0 .. 8) |i| {
+                for (0..8) |i| {
                     if (self.i < self.input.len and tables.TagNameCharTable[self.input[self.i]]) {
                         var c = self.input[self.i];
                         c = tables.lower(c);
@@ -659,7 +658,7 @@ fn expectDocumentStructureValid(doc: anytype) !void {
         try testing.expect(@as(usize, @intCast(node.subtree_end)) < nodes.len);
 
         if (is_element) {
-            const attr_end: usize = @intCast(@intFromEnum(node.attr_end));
+            const attr_end = node.attrEnd();
             try testing.expect(span_end <= attr_end);
             try testing.expect(attr_end <= doc.source.len);
         }

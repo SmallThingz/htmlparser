@@ -66,14 +66,14 @@ pub const RawNode = struct {
     parent: IndexInt,
 
     /// Inclusive subtree tail index for fast descendant skipping.
-    subtree_end: IndexInt ,
+    subtree_end: IndexInt,
 
     /// It is not possible for attr end to be < 2; here is the reasoning.
     /// `<x>`
     ///  ^^!
     ///
     ///  So the very first attr can only start at 2nd index
-    pub const AttrEnd = enum (IndexInt) {
+    pub const AttrEnd = enum(IndexInt) {
         text_node = 0,
         invalid_1 = 1,
         _,
@@ -92,6 +92,11 @@ pub const RawNode = struct {
     /// Returns whether this node is an element node.
     pub inline fn isElement(self: @This(), idx: IndexInt) bool {
         return idx != 0 and self.attr_end != .text_node;
+    }
+
+    /// Returns the raw attribute span end as a host-size index.
+    pub inline fn attrEnd(self: @This()) usize {
+        return @intCast(@intFromEnum(self.attr_end));
     }
 };
 
@@ -532,7 +537,7 @@ fn GetNode(comptime options: ParseOptions) type {
         fn writeAttrsHtml(doc: anytype, noalias node_raw: anytype, writer: anytype) WriterError(@TypeOf(writer))!void {
             const source: []const u8 = doc.source;
             var i: usize = @intCast(node_raw.name_or_text.end);
-            const end: usize = @intCast(@intFromEnum(node_raw.attr_end));
+            const end = node_raw.attrEnd();
 
             while (i < end) {
                 while (i < end and tables.WhitespaceTable[source[i]]) : (i += 1) {}
@@ -1348,7 +1353,7 @@ test "non-destructive attribute reads do not rewrite attribute bytes" {
     try std.testing.expectEqualStrings("a&b", value);
 
     const attr_start: usize = @intCast(node.raw().name_or_text.end);
-    const attr_end: usize = @intCast(@intFromEnum(node.raw().attr_end));
+    const attr_end = node.raw().attrEnd();
     try std.testing.expect(std.mem.indexOf(u8, doc.source[attr_start..attr_end], "&amp;") != null);
     try std.testing.expectEqualSlices(u8, before[0..], html[0..]);
 }
@@ -1649,7 +1654,7 @@ test "parse-time attribute decoding is off by default and query-time lookup deco
 
     const node = doc.findFirstTag("div") orelse return error.TestUnexpectedResult;
     const attr_start: usize = node.raw().name_or_text.end;
-    const span = doc.source[attr_start..@as(usize, @intCast(@intFromEnum(node.raw().attr_end)))];
+    const span = doc.source[attr_start..node.raw().attrEnd()];
     try std.testing.expect(std.mem.indexOf(u8, span, "&amp;") != null);
 
     const value = node.getAttributeValue("data-v") orelse return error.TestUnexpectedResult;
@@ -1740,7 +1745,7 @@ test "inplace attr lazy parse updates state markers and supports selector-trigge
     try std.testing.expectEqualStrings("a&b", n);
 
     const attr_start: usize = node.raw().name_or_text.end;
-    const span = doc.source[attr_start..@as(usize, @intCast(@intFromEnum(node.raw().attr_end)))];
+    const span = doc.source[attr_start..node.raw().attrEnd()];
     const q_marker = [_]u8{ 'q', 0, 0 };
     const q_pos = std.mem.indexOf(u8, span, &q_marker) orelse return error.TestUnexpectedResult;
     try std.testing.expect(q_pos < span.len);
@@ -1768,7 +1773,7 @@ test "attribute matching short-circuits and does not parse later attrs on early 
 
     const node = doc.queryOne("#x") orelse return error.TestUnexpectedResult;
     const attr_start: usize = node.raw().name_or_text.end;
-    const span = doc.source[attr_start..@as(usize, @intCast(@intFromEnum(node.raw().attr_end)))];
+    const span = doc.source[attr_start..node.raw().attrEnd()];
     const class_pos = std.mem.indexOf(u8, span, "class") orelse return error.TestUnexpectedResult;
     const marker_pos = class_pos + "class".len;
     try std.testing.expect(marker_pos < span.len);
