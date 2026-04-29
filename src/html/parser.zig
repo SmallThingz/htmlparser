@@ -564,6 +564,7 @@ fn ParseState(comptime opts: ParseOptions) type {
             return null;
         }
 
+        /// Please... Try to make this nicer. I dare you!!
         inline fn findRawTextClose(noalias self: *Self, tag_name: []const u8, tag_key: u64, start: usize) ?struct { content_end: usize, close_end: usize } {
             std.debug.assert(tag_name.len != 0);
             // Raw-text scanning only recognizes a real `</tag>` terminator.

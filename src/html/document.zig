@@ -116,16 +116,8 @@ pub const ParseOptions = struct {
     }
 
     /// Parses `input` and returns a fully-owned document for this option set.
-    pub fn parse(comptime options: @This(), allocator: std.mem.Allocator, input: options.Input()) !options.Document() {
-        return parser.parse(options, allocator, input);
-    }
-
-    /// Formats parse options for human-readable output.
-    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
-        try writer.print("ParseOptions{{drop_whitespace_text_nodes={}, non_destructive={}}}", .{
-            self.drop_whitespace_text_nodes,
-            self.non_destructive,
-        });
+    pub fn parse(comptime options: @This(), gpa: std.mem.Allocator, input: options.Input()) !options.Document() {
+        return parser.parse(options, gpa, input);
     }
 
     /// Returns the lightweight node wrapper type bound to this option set.
@@ -151,6 +143,14 @@ pub const ParseOptions = struct {
     /// Returns the document type (parser + query surface) for this option set.
     pub fn Document(options: @This()) type {
         return GetDocument(options);
+    }
+
+    /// Formats parse options for human-readable output.
+    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        try writer.print("ParseOptions{{drop_whitespace_text_nodes={}, non_destructive={}}}", .{
+            self.drop_whitespace_text_nodes,
+            self.non_destructive,
+        });
     }
 };
 
@@ -195,14 +195,12 @@ fn GetNode(comptime options: ParseOptions) type {
 
         /// Writes HTML serialization of this node and its subtree to `writer`.
         pub fn writeHtml(self: @This(), writer: anytype) WriterError(@TypeOf(writer))!void {
-            const node_raw = &self.doc.nodes[@intCast(self.index)];
-            try writeNodeHtml(self.doc, self.index, node_raw, writer);
+            try writeNodeHtml(self.doc, self.index, self.raw(), writer, true);
         }
 
         /// Writes HTML serialization of this node only, excluding its children.
         pub fn writeHtmlSelf(self: @This(), writer: anytype) WriterError(@TypeOf(writer))!void {
-            const node_raw = &self.doc.nodes[@intCast(self.index)];
-            try writeNodeHtmlSelf(self.doc, self.index, node_raw, writer);
+            try writeNodeHtml(self.doc, self.index, self.raw(), writer, false);
         }
 
         /// Default formatter uses HTML serialization for this node.
@@ -211,90 +209,13 @@ fn GetNode(comptime options: ParseOptions) type {
         }
 
         /// Returns text content of this subtree; may borrow or allocate in `arena_alloc`.
-        pub fn innerText(self: @This(), arena_alloc: std.mem.Allocator) ![]const u8 {
-            return self.innerTextWithOptions(arena_alloc, .{});
+        pub fn innerText(self: @This(), arena: std.mem.Allocator) ![]const u8 {
+            return self.innerTextWithOptions(arena, .{});
         }
 
         /// Same as `innerText` but with explicit text-normalization options.
         pub fn innerTextWithOptions(self: @This(), arena_alloc: std.mem.Allocator, opts: Self.TextOptions) ![]const u8 {
-            const doc = self.doc;
-            const node_raw = &doc.nodes[self.index];
-
-            if (comptime options.non_destructive) {
-                if (node_raw.isText(self.index)) {
-                    const text = node_raw.name_or_text.slice(doc.source);
-                    if (!opts.normalize_whitespace and std.mem.indexOfScalar(u8, text, '&') == null) return text;
-                    return self.innerTextOwnedWithOptions(arena_alloc, opts);
-                }
-
-                var text_count: usize = 0;
-                var first_text: ?[]const u8 = null;
-                var idx = self.index + 1;
-                while (idx <= node_raw.subtree_end and idx < doc.nodes.len) : (idx += 1) {
-                    const node = &doc.nodes[idx];
-                    if (!node.isText(idx)) continue;
-                    text_count += 1;
-                    if (text_count == 1) first_text = node.name_or_text.slice(doc.source);
-                    if (text_count > 1) break;
-                }
-
-                if (text_count == 0) return "";
-                if (text_count == 1 and !opts.normalize_whitespace and std.mem.indexOfScalar(u8, first_text.?, '&') == null) {
-                    return first_text.?;
-                }
-                return self.innerTextOwnedWithOptions(arena_alloc, opts);
-            } else {
-                if (node_raw.isText(self.index)) {
-                    const mut_node = &doc.nodes[self.index];
-                    _ = decodeTextNode(mut_node, doc);
-                    if (!opts.normalize_whitespace) return mut_node.name_or_text.slice(doc.source);
-                    return normalizeTextNodeInPlace(mut_node, doc);
-                }
-
-                var first_idx: IndexInt = InvalidIndex;
-                var count: usize = 0;
-
-                var idx = self.index + 1;
-                while (idx <= node_raw.subtree_end and idx < doc.nodes.len) : (idx += 1) {
-                    const node = &doc.nodes[idx];
-                    if (!node.isText(idx)) continue;
-                    count += 1;
-                    _ = decodeTextNode(node, doc);
-                    if (count == 1) first_idx = idx;
-                }
-
-                if (count == 0) return "";
-                if (count == 1) {
-                    const only = &doc.nodes[first_idx];
-                    if (!opts.normalize_whitespace) return only.name_or_text.slice(doc.source);
-                    return normalizeTextNodeInPlace(only, doc);
-                }
-
-                var out = std.ArrayList(u8).empty;
-                defer out.deinit(arena_alloc);
-
-                if (!opts.normalize_whitespace) {
-                    idx = self.index + 1;
-                    while (idx <= node_raw.subtree_end and idx < doc.nodes.len) : (idx += 1) {
-                        const node = &doc.nodes[idx];
-                        if (!node.isText(idx)) continue;
-                        const seg = node.name_or_text.slice(doc.source);
-                        try ensureOutExtra(&out, arena_alloc, seg.len);
-                        out.appendSliceAssumeCapacity(seg);
-                    }
-                } else {
-                    var state: WhitespaceNormState = .{};
-                    idx = self.index + 1;
-                    while (idx <= node_raw.subtree_end and idx < doc.nodes.len) : (idx += 1) {
-                        const node = &doc.nodes[idx];
-                        if (!node.isText(idx)) continue;
-                        try appendNormalizedSegment(&out, arena_alloc, node.name_or_text.slice(doc.source), &state);
-                    }
-                }
-
-                if (out.items.len == 0) return "";
-                return try out.toOwnedSlice(arena_alloc);
-            }
+            return self.tryBorrowInnerText(opts) orelse try self.innerTextOwnedWithOptions(arena_alloc, opts);
         }
 
         /// Always materializes subtree text into newly allocated output.
@@ -304,40 +225,10 @@ fn GetNode(comptime options: ParseOptions) type {
 
         /// Owned variant of `innerTextWithOptions`.
         pub fn innerTextOwnedWithOptions(self: @This(), arena_alloc: std.mem.Allocator, opts: Self.TextOptions) ![]const u8 {
-            const doc = self.doc;
-            const node_raw = &doc.nodes[self.index];
-
             var out = std.ArrayList(u8).empty;
             defer out.deinit(arena_alloc);
-
-            if (node_raw.isText(self.index)) {
-                const text = node_raw.name_or_text.slice(doc.source);
-                if (!opts.normalize_whitespace) {
-                    try appendDecodedSegment(&out, arena_alloc, text);
-                } else {
-                    var state: WhitespaceNormState = .{};
-                    try appendDecodedNormalizedSegment(&out, arena_alloc, text, &state);
-                }
-                return try out.toOwnedSlice(arena_alloc);
-            }
-
-            if (!opts.normalize_whitespace) {
-                var idx = self.index + 1;
-                while (idx <= node_raw.subtree_end and idx < doc.nodes.len) : (idx += 1) {
-                    const node = &doc.nodes[idx];
-                    if (!node.isText(idx)) continue;
-                    try appendDecodedSegment(&out, arena_alloc, node.name_or_text.slice(doc.source));
-                }
-                return try out.toOwnedSlice(arena_alloc);
-            }
-
             var state: WhitespaceNormState = .{};
-            var idx = self.index + 1;
-            while (idx <= node_raw.subtree_end and idx < doc.nodes.len) : (idx += 1) {
-                const node = &doc.nodes[idx];
-                if (!node.isText(idx)) continue;
-                try appendDecodedNormalizedSegment(&out, arena_alloc, node.name_or_text.slice(doc.source), &state);
-            }
+            try self.appendInnerText(&out, arena_alloc, opts, &state);
             return try out.toOwnedSlice(arena_alloc);
         }
 
@@ -410,6 +301,61 @@ fn GetNode(comptime options: ParseOptions) type {
             return node.name_or_text.slice(doc.source);
         }
 
+        fn tryBorrowInnerText(self: @This(), opts: Self.TextOptions) ?[]const u8 {
+            const doc = self.doc;
+            const node_raw = self.raw();
+
+            if (node_raw.isText(self.index)) {
+                return self.borrowSingleTextNode(&doc.nodes[self.index], opts);
+            }
+
+            var first_idx: IndexInt = InvalidIndex;
+            var idx = self.index + 1;
+            while (idx <= node_raw.subtree_end and idx < doc.nodes.len) : (idx += 1) {
+                if (!doc.nodes[idx].isText(idx)) continue;
+                if (first_idx != InvalidIndex) return null;
+                first_idx = idx;
+            }
+
+            if (first_idx == InvalidIndex) return "";
+            return self.borrowSingleTextNode(&doc.nodes[first_idx], opts);
+        }
+
+        fn borrowSingleTextNode(self: @This(), noalias node: *RawNode, opts: Self.TextOptions) ?[]const u8 {
+            if (comptime options.non_destructive) {
+                const text = node.name_or_text.slice(self.doc.source);
+                if (opts.normalize_whitespace or std.mem.indexOfScalar(u8, text, '&') != null) return null;
+                return text;
+            }
+
+            _ = decodeTextNode(node, self.doc);
+            return if (opts.normalize_whitespace)
+                normalizeTextNodeInPlace(node, self.doc)
+            else
+                node.name_or_text.slice(self.doc.source);
+        }
+
+        fn appendInnerText(
+            self: @This(),
+            noalias out: *std.ArrayList(u8),
+            arena_alloc: std.mem.Allocator,
+            opts: Self.TextOptions,
+            noalias state: *WhitespaceNormState,
+        ) !void {
+            const doc = self.doc;
+            const node_raw = self.raw();
+
+            if (node_raw.isText(self.index)) {
+                return appendTextSegment(out, arena_alloc, node_raw.name_or_text.slice(doc.source), opts.normalize_whitespace, state);
+            }
+
+            var idx = self.index + 1;
+            while (idx <= node_raw.subtree_end and idx < doc.nodes.len) : (idx += 1) {
+                if (!doc.nodes[idx].isText(idx)) continue;
+                try appendTextSegment(out, arena_alloc, doc.nodes[idx].name_or_text.slice(doc.source), opts.normalize_whitespace, state);
+            }
+        }
+
         fn normalizeTextNodeInPlace(noalias node: anytype, doc: anytype) []const u8 {
             if (comptime options.non_destructive) unreachable;
             const text_mut = node.name_or_text.sliceMut(doc.source);
@@ -456,11 +402,6 @@ fn GetNode(comptime options: ParseOptions) type {
             };
         }
 
-        fn appendNormalizedSegment(noalias out: *std.ArrayList(u8), alloc: std.mem.Allocator, seg: []const u8, noalias state: *WhitespaceNormState) !void {
-            try ensureOutExtra(out, alloc, seg.len + 1);
-            appendNormalizedSegmentAssumeCapacity(out, seg, state);
-        }
-
         fn appendNormalizedSegmentAssumeCapacity(noalias out: *std.ArrayList(u8), seg: []const u8, noalias state: *WhitespaceNormState) void {
             for (seg) |c| {
                 if (tables.WhitespaceTable[c]) {
@@ -477,7 +418,26 @@ fn GetNode(comptime options: ParseOptions) type {
             }
         }
 
-        fn writeNodeHtml(doc: anytype, idx: IndexInt, noalias node_raw: anytype, writer: anytype) WriterError(@TypeOf(writer))!void {
+        fn appendTextSegment(
+            noalias out: *std.ArrayList(u8),
+            alloc: std.mem.Allocator,
+            seg: []const u8,
+            normalize_whitespace: bool,
+            noalias state: *WhitespaceNormState,
+        ) !void {
+            if (normalize_whitespace) {
+                return appendDecodedNormalizedSegment(out, alloc, seg, state);
+            }
+            return appendDecodedSegment(out, alloc, seg);
+        }
+
+        fn writeNodeHtml(
+            doc: anytype,
+            idx: IndexInt,
+            noalias node_raw: anytype,
+            writer: anytype,
+            include_children: bool,
+        ) WriterError(@TypeOf(writer))!void {
             if (idx == 0) {
                 try writeChildrenHtml(doc, idx, node_raw, writer);
                 return;
@@ -493,29 +453,12 @@ fn GetNode(comptime options: ParseOptions) type {
             try writeAttrsHtml(doc, node_raw, writer);
             try writeByte(writer, '>');
 
-            if (!tags.isVoidTagWithKey(name, tags.first8Key(name))) {
+            if (include_children and !tags.isVoidTagWithKey(name, tags.first8Key(name))) {
                 try writeChildrenHtml(doc, idx, node_raw, writer);
                 try writer.writeAll("</");
                 try writer.writeAll(name);
                 try writeByte(writer, '>');
             }
-        }
-
-        fn writeNodeHtmlSelf(doc: anytype, idx: IndexInt, noalias node_raw: anytype, writer: anytype) WriterError(@TypeOf(writer))!void {
-            if (idx == 0) {
-                try writeChildrenHtml(doc, idx, node_raw, writer);
-                return;
-            }
-            if (node_raw.isText(idx)) {
-                try writer.writeAll(node_raw.name_or_text.slice(doc.source));
-                return;
-            }
-
-            const name = node_raw.name_or_text.slice(doc.source);
-            try writeByte(writer, '<');
-            try writer.writeAll(name);
-            try writeAttrsHtml(doc, node_raw, writer);
-            try writeByte(writer, '>');
         }
 
         fn writeChildrenHtml(doc: anytype, parent_idx: IndexInt, noalias node_raw: anytype, writer: anytype) WriterError(@TypeOf(writer))!void {
@@ -528,7 +471,7 @@ fn GetNode(comptime options: ParseOptions) type {
                     idx += 1;
                     continue;
                 }
-                try writeNodeHtml(doc, idx, child, writer);
+                try writeNodeHtml(doc, idx, child, writer, true);
                 const next = child.subtree_end + 1;
                 idx = if (next > idx) next else idx + 1;
             }
@@ -758,7 +701,7 @@ fn GetNode(comptime options: ParseOptions) type {
         /// Returns lazy descendant iterator for already compiled selector.
         pub fn queryAllCached(self: @This(), sel: ast.Selector) QueryIterType {
             self.doc.ensureQueryPrereqs(sel);
-            return .{ .doc = self.doc, .selector = sel, .scope_root = self.index, .next_index = self.index + 1 };
+            return self.doc.queryIter(sel, self.index);
         }
 
         /// Parses selector at runtime and returns lazy descendant iterator.
@@ -894,21 +837,21 @@ fn GetDocument(comptime options: ParseOptions) type {
             };
         }
 
+        fn freeNodes(noalias self: *DocSelf) void {
+            if (self.nodes.len == 0) return;
+            self.allocator.free(self.nodes);
+            self.nodes = &[_]RawNode{};
+        }
+
         /// Releases all document-owned memory.
         pub fn deinit(noalias self: *DocSelf) void {
-            if (self.nodes.len != 0) {
-                self.allocator.free(self.nodes);
-                self.nodes = &[_]RawNode{};
-            }
+            self.freeNodes();
         }
 
         /// Clears parsed state and releases parsed node storage.
         pub fn clear(noalias self: *DocSelf) void {
             self.source = emptySource();
-            if (self.nodes.len != 0) {
-                self.allocator.free(self.nodes);
-                self.nodes = &[_]RawNode{};
-            }
+            self.freeNodes();
         }
 
         fn emptySource() options.Input() {
@@ -978,16 +921,12 @@ fn GetDocument(comptime options: ParseOptions) type {
         }
 
         fn queryOneCachedFrom(self: *const DocSelf, sel: ast.Selector, scope_root: IndexInt) ?NodeTypeWrapper {
-            const mut_self: *DocSelf = @constCast(self);
-            mut_self.ensureQueryPrereqs(sel);
-            const idx = matcher.queryOneIndex(DocSelf, self, sel, scope_root) orelse InvalidIndex;
-            if (idx == InvalidIndex) return null;
-            return self.nodeAt(idx);
+            self.ensureQueryPrereqs(sel);
+            return if (matcher.queryOneIndex(DocSelf, self, sel, scope_root)) |idx| self.nodeAt(idx) else null;
         }
 
         fn queryOneCachedDebugFrom(self: *const DocSelf, sel: ast.Selector, scope_root: IndexInt) DebugQueryResultType {
-            const mut_self: *DocSelf = @constCast(self);
-            mut_self.ensureQueryPrereqs(sel);
+            self.ensureQueryPrereqs(sel);
             var report: selector_debug.QueryDebugReport = .{};
             var scratch = std.heap.ArenaAllocator.init(self.allocator);
             defer scratch.deinit();
@@ -1008,9 +947,8 @@ fn GetDocument(comptime options: ParseOptions) type {
 
         /// Returns lazy iterator over matches for precompiled selector.
         pub fn queryAllCached(self: *const DocSelf, sel: ast.Selector) QueryIterType {
-            const mut_self: *DocSelf = @constCast(self);
-            mut_self.ensureQueryPrereqs(sel);
-            return .{ .doc = @constCast(self), .selector = sel, .scope_root = InvalidIndex, .next_index = 1 };
+            self.ensureQueryPrereqs(sel);
+            return self.queryIter(sel, InvalidIndex);
         }
 
         /// Parses selector at runtime and returns lazy iterator.
@@ -1024,22 +962,22 @@ fn GetDocument(comptime options: ParseOptions) type {
             selector: []const u8,
             scope_root: IndexInt,
         ) runtime_selector.Error!QueryIterType {
-            const mut_self: *DocSelf = @constCast(self);
             const sel = try ast.Selector.compileRuntime(allocator, selector);
-            mut_self.ensureQueryPrereqs(sel);
-            return if (scope_root == InvalidIndex)
-                self.queryAllCached(sel)
-            else
-                QueryIterType{
-                    .doc = @constCast(self),
-                    .selector = sel,
-                    .scope_root = scope_root,
-                    .next_index = scope_root + 1,
-                };
+            self.ensureQueryPrereqs(sel);
+            return self.queryIter(sel, scope_root);
         }
 
-        fn ensureQueryPrereqs(noalias self: *DocSelf, selector: ast.Selector) void {
+        fn ensureQueryPrereqs(self: *const DocSelf, selector: ast.Selector) void {
             _ = .{ self, selector };
+        }
+
+        fn queryIter(self: *const DocSelf, sel: ast.Selector, scope_root: IndexInt) QueryIterType {
+            return .{
+                .doc = @constCast(self),
+                .selector = sel,
+                .scope_root = scope_root,
+                .next_index = if (scope_root == InvalidIndex) 1 else scope_root + 1,
+            };
         }
 
         /// Returns parent index for `idx`.
@@ -1104,11 +1042,7 @@ fn GetDocument(comptime options: ParseOptions) type {
 
         /// Writes HTML serialization of this document root only, excluding its children.
         pub fn writeHtmlSelf(self: @This(), writer: anytype) NodeTypeWrapper.WriterError(@TypeOf(writer))!void {
-            if (comptime options.non_destructive) {
-                try writer.writeAll(self.source);
-                return;
-            }
-            return self.nodeAt(0).?.writeHtmlSelf(writer);
+            return self.writeHtml(writer);
         }
 
         /// Default formatter uses HTML serialization for this node.
@@ -1174,10 +1108,9 @@ fn GetDocument(comptime options: ParseOptions) type {
     };
 }
 
-const NodeRaw = RawNode;
 /// Re-exported text extraction options used by node text APIs.
 pub const TextOptions = GetNode(.{}).TextOptions;
-
+const NodeRaw = RawNode;
 fn resetParsed(comptime options: ParseOptions, doc: *options.Document(), input: options.Input()) !void {
     doc.deinit();
     doc.* = try options.parse(doc.allocator, input);
